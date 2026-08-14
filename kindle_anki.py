@@ -225,18 +225,27 @@ def matches_books(lk: Lookup, patterns: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
-def blank_out(sentence: str, span: str, word: str, stem: str) -> str:
-    """Replace the answer with a blank; try Claude's span, then word, then stem.
+def blank_out(sentence: str, span, word: str, stem: str) -> str:
+    """Replace the answer with a blank; try Claude's span(s), then word, then stem.
 
-    `span` is the exact surface span Claude asked us to hide (may be a
-    multi-word expression like "make off"). If nothing matches, leave the
-    sentence intact rather than mangle it.
+    `span` is the exact surface span Claude asked us to hide. It may be a
+    single string (a contiguous expression like "make off") or a list of
+    strings for a separable phrasal verb split by its object ("tie ... up" in
+    "she tied her hair up" → ["tied", "up"]). Every piece must match verbatim,
+    or we fall back rather than emit a half-blanked sentence. If nothing
+    matches, leave the sentence intact rather than mangle it.
     """
-    if span:
-        # Exact surface form — match verbatim, no inflection expansion.
-        pattern = re.compile(rf"\b{re.escape(span)}\b", re.IGNORECASE)
-        blanked, n = pattern.subn(BLANK, sentence)
-        if n:
+    parts = [span] if isinstance(span, str) else list(span or [])
+    parts = [p for p in parts if p]
+    if parts:
+        # Exact surface form(s) — match verbatim, no inflection expansion.
+        blanked = sentence
+        for part in parts:
+            pattern = re.compile(rf"\b{re.escape(part)}\b", re.IGNORECASE)
+            blanked, n = pattern.subn(BLANK, blanked)
+            if not n:
+                break  # all-or-nothing: fall through to word/stem
+        else:
             return blanked
     for candidate in (word, stem):
         if not candidate:
@@ -334,7 +343,7 @@ def build_notes(stem: str, lookups: list[Lookup], response: dict) -> BuildResult
                     "Definition": card["definition"],
                     "Sentence": blank_out(
                         primary.sentence,
-                        card.get("span", ""),
+                        card.get("span", []),
                         primary.word,
                         primary.stem,
                     ),
@@ -578,9 +587,12 @@ restate the headword, any inflected form of it, or an obvious cognate — the \
 learner must guess it from the definition. No examples, etymology, or labels.
   - `polish`: a Polish translation of that same sense (shown only on the back, \
 so it carries no guessing constraint).
-  - `span`: the exact substring, copied VERBATIM from the primary context's \
-sentence, to blank out on the card front. It must occur character-for-character \
-in that sentence.
+  - `span`: a list of the exact substrings, copied VERBATIM from the primary \
+context's sentence, to blank out on the card front. Each must occur \
+character-for-character in that sentence. Usually one piece (`["make off"]`). \
+For a separable phrasal verb split by its object, give each piece separately so \
+the object stays visible: "she tied her hair up" for the sense "tie up" → \
+`["tied", "up"]`.
 
 Echo each group's `stem`. Return exactly one result per input group and exactly \
 one assignment per input context.
@@ -603,7 +615,10 @@ CLUSTER_SCHEMA = {
                                 "headword": {"type": "string"},
                                 "definition": {"type": "string"},
                                 "polish": {"type": "string"},
-                                "span": {"type": "string"},
+                                "span": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
                             },
                             "required": ["headword", "definition", "polish", "span"],
                             "additionalProperties": False,

@@ -15,7 +15,7 @@ exist.
 | 2 | Dedup mechanism | Claude judges each new lookup against that stem's existing cards |
 | 3 | Cross-run tracking | Anki `Lookups` field = source of truth for cards; `skipped.json` for junk only |
 | 4 | Stem index | Hidden `Stem` field; clean rebuild, no migration |
-| 5 | Blank-out | Claude returns the exact surface span to blank |
+| 5 | Blank-out | Claude returns exact surface span(s) to blank — a list, so separable phrasal verbs ("tie ... up") blank each piece |
 | 6 | Request shape | Batched multi-stem calls (~40 stems/call) |
 | 7 | Anki dup guard | `allowDuplicate: True` — our pipeline owns dedup |
 
@@ -59,7 +59,7 @@ Stopword filter and `--book` apply at stem level, unchanged (so "the" ×10 is dr
 **6. Claude returns per group:**
 ```json
 { "stem": "...",
-  "new_cards": [{"headword": "...", "definition": "...", "polish": "...", "span": "..."}],
+  "new_cards": [{"headword": "...", "definition": "...", "polish": "...", "span": ["..."]}],
   "assignments": [{"lookup_id": "...", "verdict": "new|existing|junk",
                    "card_index": 0, "reason": "..."}] }
 ```
@@ -69,7 +69,7 @@ Stopword filter and `--book` apply at stem level, unchanged (so "the" ×10 is dr
 
 **7. Build notes** — one per `new_card`:
 - `Stem`=lemma, `Word`=headword, `Definition`, `Polish`.
-- `Sentence`=`blank_out(primary.sentence, span)`; `blank_out` first tries Claude's `span`, falls back to word/stem.
+- `Sentence`=`blank_out(primary.sentence, span)`; `span` is a list of verbatim surface pieces (one for most cards, several for a split phrasal verb). `blank_out` blanks every piece (all-or-nothing), else falls back to word/stem.
 - `Source`/`LookupDate` from **primary = earliest-timestamp lookup** assigned to the card.
 - `Lookups` = comma-joined ids of **all** lookups assigned to the card.
 - `addNotes(..., allowDuplicate=True)`.
