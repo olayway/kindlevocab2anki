@@ -1,4 +1,5 @@
 .env
 *.db
-processed.json
+skipped.json
 __pycache__/
+.pytest_cache/
