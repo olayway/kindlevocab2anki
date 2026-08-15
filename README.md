@@ -6,6 +6,12 @@ appeared in, splits a word's distinct meanings into separate cards, promotes a
 lookup to the phrasal verb or expression it really belongs to, and merges
 repeat lookups of the same sense.
 
+> [!IMPORTANT]
+> This only works if your Kindle's **Vocabulary Builder** is switched on
+> (Settings → Language & Dictionaries → **Vocabulary Builder → On**). It records
+> only the words you look up *while it's on*, so turn it on before you read —
+> there's no way to recover lookups from before.
+
 You see a definition and the sentence with the answer blanked out; you recall
 the word. The back confirms it — and, if you turn on translations, adds a
 translation of that same sense into your native language.
@@ -62,9 +68,29 @@ Claude clusters them:
 | **uv** | `brew install uv` — runs the script and its dependencies; nothing to install manually |
 | **Anki** | running, with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on, listening on `127.0.0.1:8765` |
 | **Anthropic API key** | in `.env` as `ANTHROPIC_API_KEY=...` (mode `600`, git-ignored) |
-| **Kindle** | connected by USB and mounted at `/Volumes/Kindle`, at least once |
+| **Kindle** | with **Vocabulary Builder** switched on, connected by USB and mounted at `/Volumes/Kindle` at least once |
+
+## First-time setup
+
+Do these once, in order, before the quick start below.
+
+1. **Install uv.** `brew install uv`. Nothing else to install — the script
+   declares its own dependencies and uv fetches them on first run.
+2. **Start Anki with AnkiConnect.** Install the
+   [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on
+   (Tools → Add-ons → Get Add-ons → code `2055492159`, then restart Anki) and
+   leave Anki **running** — it's needed even for the dry run.
+3. **Add your API key.** Create `.env` in this directory with
+   `ANTHROPIC_API_KEY=sk-ant-...` (only needed for `--apply`). Optionally add
+   `TRANSLATION_LANGUAGE=Polish` for back-of-card translations.
+4. **Connect the Kindle by USB** and confirm it mounts at `/Volumes/Kindle`
+   in Finder. The first run copies `vocab.db` off it into this directory as a
+   cache, so later runs work with the Kindle unplugged. If it never appears
+   there, pass `--db PATH` to a copy you have.
 
 ## Quick start
+
+With the Kindle plugged in (or a cached `vocab.db` already in this directory):
 
 ```sh
 # 1. See what would be imported — no Claude calls, nothing written
