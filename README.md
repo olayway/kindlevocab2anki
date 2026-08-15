@@ -2,8 +2,7 @@
 
 Turns the words you look up while reading on a Kindle into Anki flashcards — one card per **sense**, not per word. Claude reads the sentence each lookup appeared in, splits a word's distinct meanings into separate cards, builds cards for the phrasal verb or idiom a word belongs to, and merges repeat lookups of the same sense.
 
-You see a definition and the sentence with the answer blanked out; you recall the word. The back confirms it — and, if you turn on translations, adds a
-translation of that same sense into your native language.
+You see a definition and the sentence with the answer blanked out; you recall the word. The back confirms it — and, if you turn on translations, adds a translation of that same sense into your native language.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -20,6 +19,21 @@ translation of that same sense into your native language.
 ```
 
 Translations are **off by default** and configurable: pass `--language French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. It's deliberately on the **back only** — putting it on the front would turn recall into translation; here it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual.
+
+## Features
+
+Each line pairs a behavior with the reasoning behind it; follow the link for the full detail.
+
+- **Sense-aware, not word-aware** — one card per _meaning_, not per lemma: polysemy is split into separate cards, phrasal verbs and idioms are promoted to their real headword, headwords are stored in dictionary form, repeat lookups of one sense merge, and junk is rejected. Kindle records raw taps; a good deck needs meanings, and only reading the sentence can tell them apart. → [Sense-aware, not word-aware](#sense-aware-not-word-aware)
+- **Cloze-style recall** — the front is a definition plus the original sentence with the answer blanked out; you recall the word, and the back confirms it. Recalling from a real context you met beats staring at an isolated word. → [Blanking](#blanking)
+- **Optional back-only translations** — off by default, enabled per-run with `--language`. On the front it would make you translate instead of recall; on the back it just confirms the sense. → intro, above.
+- **Two ways to write cards** — live into a running Anki over AnkiConnect (default), or an offline `.apkg` package you import by hand (`--export`). AnkiConnect is the tightest loop; the package path needs nothing installed and works for mobile-only users. → [Offline export](#offline-export)
+- **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
+- **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
+- **Resilient writes** — read-only AnkiConnect calls retry through a dropped connection; mutating ones fail fast instead, because a blind retry could double-add a note. An interrupted run resumes cleanly from what's already saved. → [How it works](#how-it-works)
+- **English-only, on purpose** — only `en` lookups are read. Keeping one language keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled.
+- **Auto database handling** — the Kindle's `vocab.db` is copied off the device to a local cache before anything reads it (SQLite on a removable FAT volume shouldn't be opened in place), so later runs work with the Kindle unplugged; `--db PATH` overrides detection. → [How it works](#how-it-works)
+- **One file, zero install** — the whole tool is a single script with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, so `uv run kindle_anki.py` fetches everything on first run and there's nothing to `pip install`. → [Files](#files)
 
 ## Sense-aware, not word-aware
 
@@ -133,7 +147,9 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every en lookup (with i
 
 **5. Cluster.** New lookups are grouped by stem and sent to Claude in batches.  For each group Claude returns new cards (headword, definition, the exact span to blank, and — when `--language` is set — a translation) plus a verdict for every lookup: **new** (maps to one of the new cards), **existing** (same sense as a card already in the deck), or **junk**. Structured outputs pin the response to a schema so it can't come back malformed. The system prompt is marked for prompt caching.
 
-**6. Write to Anki.** One note per new card, with `allowDuplicate: true` — this pipeline owns dedup, so Anki's own duplicate guard is turned off. `existing` verdicts append the lookup id to the matched card's `Lookups`; `junk` verdicts go to `skipped.json`.
+**6. Write to Anki.** One note per new card, with `allowDuplicate: true` — this pipeline owns dedup, so Anki's own duplicate guard is turned off. `existing` verdicts append the lookup id to the matched card's `Lookups`; `junk` verdicts go to `skipped.json`. With `--export`, the same outcomes are written to `deck_state.json` and an `.apkg` instead ([Offline export](#offline-export)).
+
+**On a dropped connection.** AnkiConnect calls aren't all retried the same way. Read-only actions (`findNotes`, `notesInfo`, …) are retried with a short backoff, because re-asking a question is always safe. Mutating actions (`addNotes`, `updateNoteFields`, …) are **not** retried — a reset can arrive _after_ Anki already applied the change, so a blind retry could double-add a note. They fail fast instead; `skipped.json` is rewritten after every batch, so re-running simply resumes from what was already saved.
 
 ## What gets created in Anki
 
