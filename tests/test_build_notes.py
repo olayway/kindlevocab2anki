@@ -153,6 +153,56 @@ def test_junk_verdict_records_reason_and_makes_no_note():
     assert result.existing == []
 
 
+def test_out_of_range_card_index_is_skipped_not_crashed(capsys):
+    # A "new" verdict pointing past the end of new_cards must not crash the
+    # batch (IndexError). It is skipped with a warning; a valid card in the same
+    # response still builds, and the skipped lookup goes unrecorded (retried).
+    lookups = [
+        mklookup("L1", stem="afflict", sentence="Diseases that afflict us."),
+        mklookup("L2", stem="afflict", sentence="It afflicts many."),
+    ]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {"headword": "afflict", "definition": "to cause suffering to", "span": "afflict"}
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""},
+            # card_index 5 does not exist — only index 0 was emitted.
+            {"lookup_id": "L2", "verdict": "new", "card_index": 5, "reason": ""},
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response)
+
+    # Only the valid card built; the bad one was dropped, not crashed.
+    assert len(result.notes) == 1
+    assert result.notes[0]["fields"]["Lookups"] == "L1"
+    assert result.existing == []
+    assert result.junk == []
+    assert "bad card_index 5" in capsys.readouterr().out
+
+
+def test_non_int_card_index_is_skipped_not_crashed(capsys):
+    # A non-int card_index on a "new" verdict must not raise TypeError on the
+    # bounds comparison — it is treated as bad and skipped.
+    lookups = [mklookup("L1", stem="afflict", sentence="Diseases that afflict us.")]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {"headword": "afflict", "definition": "to cause suffering to", "span": "afflict"}
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": None, "reason": ""}
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response)
+
+    assert result.notes == []
+    assert "bad card_index" in capsys.readouterr().out
+
+
 def test_existing_verdict_records_link_and_makes_no_note():
     lookups = [mklookup("L1", stem="make")]
     response = {

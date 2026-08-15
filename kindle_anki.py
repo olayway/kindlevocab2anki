@@ -290,7 +290,9 @@ def build_group_payload(
                 "book": lk.title,
                 "timestamp": lk.timestamp,
             }
-            for lk in lookups
+            # Earliest first, so the first context mapping to a card is its
+            # primary (matches `build_notes`, which blanks the earliest lookup).
+            for lk in sorted(lookups, key=lambda l: l.timestamp)
         ],
         "existing": existing,
     }
@@ -333,6 +335,12 @@ def build_notes(
 
     notes = []
     for idx, lks in card_lookups.items():
+        if not isinstance(idx, int) or not 0 <= idx < len(new_cards):
+            # A "new" verdict pointing at a card_index the model never emitted.
+            # Skip it (rather than crash the whole batch); the affected lookups
+            # go unrecorded and are retried on the next run.
+            print(f"  ! {stem!r}: bad card_index {idx} — skipping")
+            continue
         card = new_cards[idx]
         primary = min(lks, key=lambda l: l.timestamp)
         fields = {
@@ -589,9 +597,13 @@ For each group, decide the fate of every context and return any new cards.
 
 Per context, choose a `verdict`:
   - "new": this sense needs a new card. Set `card_index` to the index of the \
-entry in THIS group's `new_cards` that it maps to.
-  - "existing": this lookup maps to one of the `existing` cards — meaning it \
-uses the SAME HEADWORD in the SAME SENSE. Both must hold. The card teaches the learner to \
+entry in THIS group's `new_cards` that it maps to. When several contexts share \
+ONE sense, they are ALL "new" with the SAME `card_index` (and you emit that card \
+once) — never mark the second one "existing" to mean "same as one I just made".
+  - "existing": this lookup maps to one of the pre-existing cards in the \
+`existing` array above — meaning it uses the SAME HEADWORD in the SAME SENSE. \
+`existing` NEVER refers to a card you are creating now in `new_cards`; if the \
+`existing` array is empty, no context can be "existing". Both must hold. The card teaches the learner to \
 recall one specific word or expression, so an "existing" match means the lookup \
 would be answered by that SAME headword. Two things break a match, each on its \
 own:
@@ -617,7 +629,9 @@ split): "bank" (river) and "bank" (money) are two cards. This applies to \
 card for that stem, it is "new" — e.g. existing "sordid" = "morally wrong" and a \
 lookup meaning "dirty/squalid" is a new card, not "existing".
   - Multiple lookups of the SAME sense share ONE card — give them the same \
-`card_index` and emit a single `new_cards` entry.
+`card_index` and emit a single `new_cards` entry. The card's PRIMARY context is \
+the FIRST of the contexts that map to it (they are given earliest-first); draw \
+the card's `span` from that sentence (see below).
   - If a lookup's sense is really part of a multi-word expression or phrasal \
 verb (e.g. the stem "make" used as "make off with"), set that card's \
 `headword` to the whole expression, not the bare stem. Otherwise `headword` is \
@@ -631,9 +645,11 @@ Each `new_cards` entry has:
 actually used, matching its part of speech. Monolingual English only. Do NOT \
 restate the headword, any inflected form of it, or an obvious cognate — the \
 learner must guess it from the definition. No examples, etymology, or labels.
-{translation_bullet}  - `span`: a list of the exact substrings, copied VERBATIM from the primary \
-context's sentence, to blank out on the card front. Each must occur \
-character-for-character in that sentence. Usually one piece (`["make off"]`). \
+{translation_bullet}  - `span`: a list of the exact substrings, copied VERBATIM from the PRIMARY \
+context's sentence (the FIRST context mapping to this card), to blank out on the \
+card front. Each must occur character-for-character in that sentence — when a \
+card collapses several lookups, use the first mapped context's wording, not a \
+later context's inflection. Usually one piece (`["make off"]`). \
 For a separable phrasal verb split by its object, give each piece separately so \
 the object stays visible: "she tied her hair up" for the sense "tie up" → \
 `["tied", "up"]`.

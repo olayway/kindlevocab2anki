@@ -256,6 +256,40 @@ def test_same_sense_as_existing_phrasal_is_existing(claude):
     assert g["new_cards"] == []
 
 
+def test_existing_match_picks_correct_index_among_several(claude):
+    # Two existing cards for the same stem, different senses. The lookup uses the
+    # SECOND sense, so it must map to `index` 1 — not just any "existing" verdict.
+    # A single-existing-card test can't catch a model that always returns 0.
+    groups = [
+        {
+            "stem": "bank",
+            "contexts": [
+                one_context("L1", "She deposited her paycheck at the bank.")
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "bank",
+                    "definition": "the land along the side of a river",
+                },
+                {
+                    "index": 1,
+                    "headword": "bank",
+                    "definition": "a financial institution that holds money",
+                },
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["bank"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "existing"
+    assert a["card_index"] == 1
+    assert g["new_cards"] == []
+
+
 def test_inflected_verb_headword_is_infinitive(claude):
     # Sentence uses the past tense; the card's headword must be the base form.
     groups = [
@@ -274,6 +308,98 @@ def test_inflected_verb_headword_is_infinitive(claude):
     assert a["verdict"] == "new"
     headword = g["new_cards"][a["card_index"]]["headword"].lower()
     assert headword == "outdo"
+
+
+def test_same_sense_lookups_collapse_into_one_card(claude):
+    # Two lookups of the SAME sense must share one card, not mint two. This is
+    # the mirror of the polysemy split, and `build_notes` relies on it: same
+    # `card_index` -> the lookups collapse into a single note with a joined
+    # `Lookups` field.
+    contexts = [
+        one_context("L1", "The disease afflicts millions worldwide."),
+        one_context("L2", "A rare condition afflicted her for years."),
+    ]
+    groups = [{"stem": "afflict", "contexts": contexts, "existing": []}]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["afflict"]
+    assert len(g["new_cards"]) == 1
+    by_id = {a["lookup_id"]: a for a in g["assignments"]}
+    assert by_id["L1"]["verdict"] == "new"
+    assert by_id["L2"]["verdict"] == "new"
+    # Same sense -> same card.
+    assert by_id["L1"]["card_index"] == by_id["L2"]["card_index"]
+
+
+def test_span_copied_from_primary_sentence(claude):
+    # When same-sense lookups collapse, `build_notes` blanks the span out of the
+    # PRIMARY sentence only (the earliest lookup, which the pipeline sends first).
+    # So every span piece must be verbatim in that sentence, not merely in some
+    # other context. The two sentences use different inflections, so a span drawn
+    # from the wrong context would not be found in the primary one. Contexts are
+    # listed earliest-first, matching how `build_group_payload` sends them.
+    contexts = [
+        one_context("L1", "The plague afflicted the whole village.", timestamp=1),
+        one_context("L2", "Such ailments afflict the elderly most.", timestamp=5),
+    ]
+    groups = [{"stem": "afflict", "contexts": contexts, "existing": []}]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["afflict"]
+    # Precondition: same sense collapses to one card.
+    assert len(g["new_cards"]) == 1
+
+    primary = min(contexts, key=lambda c: c["timestamp"])["sentence"]
+    card = g["new_cards"][0]
+    assert card["span"], "span must not be empty"
+    for piece in card["span"]:
+        assert piece in primary, f"span piece {piece!r} not verbatim in primary sentence"
+
+
+def test_batch_of_groups_each_returns_one_result(claude):
+    # Batching is the real production path. Every input group must come back
+    # exactly once (keyed by normalized stem) with exactly one assignment per
+    # input context and the lookup_ids preserved — a prompt/schema regression
+    # would silently drop, merge, or renumber groups.
+    groups = [
+        {
+            "stem": "afflict",
+            "contexts": [
+                one_context("A1", "The diseases that afflict us have changed.")
+            ],
+            "existing": [],
+        },
+        {
+            "stem": "winston",
+            "contexts": [
+                one_context("W1", "Winston walked to the Ministry of Truth.")
+            ],
+            "existing": [],
+        },
+        {
+            "stem": "bank",
+            "contexts": [
+                one_context("B1", "We sat on the grassy bank of the river."),
+                one_context("B2", "She deposited the cheque at the bank downtown."),
+            ],
+            "existing": [],
+        },
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    # Exactly one result per input group.
+    assert set(out) >= {"afflict", "winston", "bank"}
+
+    # Exactly one assignment per input context, ids preserved, within each group.
+    expected_ids = {"afflict": {"A1"}, "winston": {"W1"}, "bank": {"B1", "B2"}}
+    for stem, ids in expected_ids.items():
+        got = [a["lookup_id"] for a in out[stem]["assignments"]]
+        assert len(got) == len(ids), f"{stem}: expected {len(ids)} assignments, got {len(got)}"
+        assert set(got) == ids
+
+    # Verdicts survived batching alongside the other groups.
+    assert out["winston"]["assignments"][0]["verdict"] == "junk"
+    assert out["afflict"]["assignments"][0]["verdict"] == "new"
 
 
 def test_phrasal_verb_promoted_to_expression_headword(claude):
