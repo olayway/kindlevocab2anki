@@ -146,7 +146,14 @@ def build_html() -> str:
 {ka.CARD_CSS}
 </style></head>
 <body>
-<button class="dark-toggle" onclick="document.body.classList.toggle('dark')">Toggle dark</button>
+<button class="dark-toggle" onclick="toggleDark()">Toggle night mode</button>
+<script>
+// Mirror Anki: night mode adds a `nightMode` class to each rendered card.
+function toggleDark() {{
+  const on = document.body.classList.toggle('dark');
+  document.querySelectorAll('.card').forEach(c => c.classList.toggle('nightMode', on));
+}}
+</script>
 <h1>Anki card preview</h1>
 <p class="sub">Rendered from CARD_CSS + LAYOUTS in kindle_anki.py. Edit those, re-run, refresh.</p>
 {''.join(parts)}

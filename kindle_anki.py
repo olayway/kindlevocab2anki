@@ -613,23 +613,101 @@ def record_existing_link(entry: dict, lookup_id: str) -> None:
 
 
 CARD_CSS = """\
+/* Warm, bookish deck: serif type on cream paper with ink-brown accents.
+   Colors live in custom properties so night mode is a single override block
+   below (Anki adds a `nightMode` class in dark mode). */
 .card {
-  font-family: -apple-system, Helvetica, sans-serif;
-  font-size: 20px;
+  --paper:    #faf6ee;
+  --ink:      #3b3228;
+  --ink-soft: #7a6a55;
+  --accent:   #5b4636;
+  --line:     #e6dcc8;
+
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+               "Times New Roman", serif;
+  font-size: 21px;
+  line-height: 1.55;
   text-align: left;
-  color: #222;
-  background: #fff;
-  padding: 1em;
+  color: var(--ink);
+  background: var(--paper);
+  padding: 1.7em 1.4em;
+  -webkit-font-smoothing: antialiased;
 }
-.definition { font-size: 22px; }
-.sentence { color: #555; font-style: italic; margin-top: 0.8em; }
-.word { font-size: 28px; font-weight: 600; }
-.translation { font-size: 20px; color: #444; margin-top: 0.2em; }
-.source { color: #888; font-size: 14px; margin-top: 1em; }
+
+/* Keep every element in one comfortably narrow, centered reading column. */
+.card > * {
+  max-width: 34em;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Styled by ROLE, not by field, so the two layouts stay balanced: whichever
+   gloss prompts you on the front is `.lead`, and whichever is revealed as a
+   secondary detail under the word is `.gloss`. The templates assign these —
+   definition layout: Definition=lead, Translation=gloss; translation layout
+   swaps them. */
+.lead {
+  font-size: 1.15em;
+  font-weight: 400;
+}
+
+.gloss {
+  font-size: 1.05em;
+  font-style: italic;
+  color: var(--ink-soft);
+  text-align: center;
+  margin-top: 0.15em;
+}
+
+.sentence {
+  color: var(--ink-soft);
+  font-style: italic;
+  margin-top: 0.9em;
+  padding-left: 0.8em;
+  border-left: 2px solid var(--line);
+}
+
+/* The reveal divider (Anki inserts <hr id=answer>). */
+hr#answer {
+  border: none;
+  height: 1px;
+  background: var(--line);
+  margin: 1.5em auto;
+  max-width: 8em;
+}
+
+/* The answer: the word is the hero, centered as a payoff. */
+.word {
+  font-size: 2em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--accent);
+  text-align: center;
+  margin-top: 0.1em;
+}
+
+.source {
+  color: var(--ink-soft);
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  text-align: center;
+  margin-top: 1.6em;
+  padding-top: 0.9em;
+  border-top: 1px solid var(--line);
+}
+
+/* Night mode: warm dark paper, light ink — same layout, inverted palette. */
+.nightMode.card, .nightMode .card, .night_mode.card, .night_mode .card {
+  --paper:    #211d18;
+  --ink:      #ece3d4;
+  --ink-soft: #b3a488;
+  --accent:   #e0c9a6;
+  --line:     #3b342b;
+}
 """
 
 CARD_FRONT = """\
-<div class="definition">{{Definition}}</div>
+<div class="definition lead">{{Definition}}</div>
 {{#Sentence}}<div class="sentence">{{Sentence}}</div>{{/Sentence}}
 """
 
@@ -637,7 +715,7 @@ CARD_BACK = """\
 {{FrontSide}}
 <hr id=answer>
 <div class="word">{{Word}}</div>
-{{#Translation}}<div class="translation">{{Translation}}</div>{{/Translation}}
+{{#Translation}}<div class="translation gloss">{{Translation}}</div>{{/Translation}}
 <div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
 
@@ -645,10 +723,11 @@ CARD_BACK = """\
 # native-language word is shown on the front (they can't yet read a definition
 # in the language they're learning), and the definition is revealed on the back
 # alongside the word. It reuses the exact same fields and CSS as the default —
-# only the placement of Definition/Translation swaps — so switching layouts
-# never touches note data, just how each card is rendered.
+# only the placement of Definition/Translation swaps, and with it the .lead /
+# .gloss role classes so sizing stays balanced — so switching layouts never
+# touches note data, just how each card is rendered.
 CARD_FRONT_TRANSLATION = """\
-<div class="translation">{{Translation}}</div>
+<div class="translation lead">{{Translation}}</div>
 {{#Sentence}}<div class="sentence">{{Sentence}}</div>{{/Sentence}}
 """
 
@@ -656,7 +735,7 @@ CARD_BACK_TRANSLATION = """\
 {{FrontSide}}
 <hr id=answer>
 <div class="word">{{Word}}</div>
-{{#Definition}}<div class="definition">{{Definition}}</div>{{/Definition}}
+{{#Definition}}<div class="definition gloss">{{Definition}}</div>{{/Definition}}
 <div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
 
