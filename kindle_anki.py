@@ -22,6 +22,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -430,19 +431,46 @@ def apply_new_cards(
 # --------------------------------------------------------------------------
 
 
-def anki(action: str, **params):
+# Read-only actions are safe to retry after a dropped connection. Mutating ones
+# are NOT: a reset can arrive after Anki already applied the request, so a retry
+# would double-add. Those fail fast — a resumed run skips already-written notes.
+_RETRYABLE_ACTIONS = frozenset(
+    {"findNotes", "notesInfo", "deckNames", "modelNames", "modelFieldNames"}
+)
+
+
+def anki(action: str, retries: int = 3, **params):
     payload = json.dumps({"action": action, "version": 6, "params": params}).encode()
-    req = urllib.request.Request(
-        ANKI_URL, data=payload, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            body = json.load(resp)
-    except urllib.error.URLError as exc:
-        raise Fatal(
-            f"Cannot reach AnkiConnect at {ANKI_URL} ({exc}).\n"
-            "  Start Anki and make sure the AnkiConnect add-on is installed."
-        ) from exc
+    attempt = 0
+    while True:
+        req = urllib.request.Request(
+            ANKI_URL, data=payload, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = json.load(resp)
+            break
+        except OSError as exc:
+            # A mid-response reset/timeout comes through raw (not wrapped in
+            # URLError, which only covers connection setup), so catch OSError.
+            transient = isinstance(exc, (ConnectionError, TimeoutError))
+            if transient and action in _RETRYABLE_ACTIONS and attempt < retries:
+                attempt += 1
+                print(
+                    f"  ! AnkiConnect {action} dropped ({exc}); "
+                    f"retry {attempt}/{retries}"
+                )
+                time.sleep(attempt)  # linear backoff: 1s, 2s, 3s
+                continue
+            if isinstance(exc, urllib.error.URLError) or isinstance(
+                exc, ConnectionRefusedError
+            ):
+                hint = "Start Anki and make sure the AnkiConnect add-on is installed."
+            else:
+                hint = "Progress is saved; re-run to resume where it stopped."
+            raise Fatal(
+                f"AnkiConnect {action} failed at {ANKI_URL} ({exc}).\n  {hint}"
+            ) from exc
     if body.get("error"):
         raise Fatal(f"AnkiConnect error on {action}: {body['error']}")
     return body["result"]

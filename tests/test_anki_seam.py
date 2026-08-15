@@ -2,8 +2,61 @@
 we monkeypatch it with a fake so no running Anki is needed.
 """
 
+import pytest
+
 import kindle_anki
-from kindle_anki import DECK_NAME
+from kindle_anki import DECK_NAME, Fatal
+
+
+class _FakeResp:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def test_anki_retries_transient_reset_on_read_action(monkeypatch):
+    # A dropped connection mid-response on a read-only action is retried and
+    # eventually succeeds — a single reset must not kill the run.
+    attempts = {"n": 0}
+
+    def fake_urlopen(req, timeout=None):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        return _FakeResp(b'{"result": 42, "error": null}')
+
+    monkeypatch.setattr(kindle_anki.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(kindle_anki.time, "sleep", lambda s: None)
+
+    assert kindle_anki.anki("findNotes", query="x") == 42
+    assert attempts["n"] == 3
+
+
+def test_anki_does_not_retry_mutating_action(monkeypatch):
+    # addNotes must NOT retry: the reset may have arrived after Anki applied the
+    # request, so a retry would double-add. Fail fast with a resume hint.
+    attempts = {"n": 0}
+
+    def fake_urlopen(req, timeout=None):
+        attempts["n"] += 1
+        raise ConnectionResetError(54, "Connection reset by peer")
+
+    monkeypatch.setattr(kindle_anki.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(kindle_anki.time, "sleep", lambda s: None)
+
+    with pytest.raises(Fatal) as exc:
+        kindle_anki.anki("addNotes", notes=[])
+
+    assert attempts["n"] == 1  # no retry
+    assert "re-run to resume" in str(exc.value)
 
 
 def test_fetch_notes_chunks_queries_and_aggregates(monkeypatch):
