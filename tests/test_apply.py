@@ -32,7 +32,7 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
         "bank": {
             "stem": "bank",
             "new_cards": [
-                {"headword": "bank", "definition": "river edge", "polish": "brzeg", "span": "bank"}
+                {"headword": "bank", "definition": "river edge", "translation": "brzeg", "span": "bank"}
             ],
             "assignments": [
                 {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
@@ -56,8 +56,9 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_cluster(client, model, payloads):
+    def fake_cluster(client, model, payloads, language=None):
         assert [p["stem"] for p in payloads] == ["bank", "winston", "make"]
+        assert language is None  # no --language -> monolingual
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
 
     def fake_anki(action, **params):
@@ -91,3 +92,45 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
     assert skipped == {"L2": "proper noun"}
     # persisted to the (temp) skipped.json
     assert kindle_anki.load_skipped() == {"L2": "proper noun"}
+
+
+def test_language_is_threaded_and_translation_written(tmp_path, monkeypatch):
+    monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
+
+    canned = {
+        "bank": {
+            "stem": "bank",
+            "new_cards": [
+                {"headword": "bank", "definition": "river edge", "translation": "rive", "span": "bank"}
+            ],
+            "assignments": [
+                {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
+            ],
+        }
+    }
+    calls = []
+
+    def fake_cluster(client, model, payloads, language=None):
+        assert language == "French"  # --language French threaded through
+        return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
+
+    def fake_anki(action, **params):
+        calls.append((action, params))
+        if action == "addNotes":
+            return list(range(len(params["notes"])))
+        return None
+
+    monkeypatch.setattr(kindle_anki, "cluster_groups", fake_cluster)
+    monkeypatch.setattr(kindle_anki, "anki", fake_anki)
+
+    apply_new_cards(
+        client=None,
+        model="m",
+        new_lookups=[lk("L1", "bank", "We sat on the river bank.", 1)],
+        existing_index={},
+        skipped={},
+        language="French",
+    )
+
+    note = [p for a, p in calls if a == "addNotes"][0]["notes"][0]
+    assert note["fields"]["Translation"] == "rive"

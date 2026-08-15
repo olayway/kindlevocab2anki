@@ -39,10 +39,11 @@ ENV_FILE = SCRIPT_DIR / ".env"
 ANKI_URL = "http://127.0.0.1:8765"
 DECK_NAME = "English::Kindle"
 MODEL_NAME = "Kindle Vocab"
+TRANSLATION_FIELD = "Translation"  # populated only when --language is given
 FIELDS = [
     "Stem",
     "Word",
-    "Polish",
+    TRANSLATION_FIELD,
     "Definition",
     "Sentence",
     "Source",
@@ -302,7 +303,9 @@ class BuildResult:
     junk: list[dict]  # {"lookup_id", "reason"} for skipped.json
 
 
-def build_notes(stem: str, lookups: list[Lookup], response: dict) -> BuildResult:
+def build_notes(
+    stem: str, lookups: list[Lookup], response: dict, translate: bool = False
+) -> BuildResult:
     """Turn Claude's per-group response into note payloads + outcomes.
 
     `new` assignments sharing a `card_index` collapse into one card; the
@@ -332,25 +335,27 @@ def build_notes(stem: str, lookups: list[Lookup], response: dict) -> BuildResult
     for idx, lks in card_lookups.items():
         card = new_cards[idx]
         primary = min(lks, key=lambda l: l.timestamp)
+        fields = {
+            "Stem": stem,
+            "Word": card["headword"],
+            "Definition": card["definition"],
+            "Sentence": blank_out(
+                primary.sentence,
+                card.get("span", []),
+                primary.word,
+                primary.stem,
+            ),
+            "Source": primary.source,
+            "LookupDate": primary.date,
+            "Lookups": ",".join(lk.id for lk in lks),
+        }
+        if translate:
+            fields[TRANSLATION_FIELD] = card.get("translation", "")
         notes.append(
             {
                 "deckName": DECK_NAME,
                 "modelName": MODEL_NAME,
-                "fields": {
-                    "Stem": stem,
-                    "Word": card["headword"],
-                    "Polish": card.get("polish", ""),
-                    "Definition": card["definition"],
-                    "Sentence": blank_out(
-                        primary.sentence,
-                        card.get("span", []),
-                        primary.word,
-                        primary.stem,
-                    ),
-                    "Source": primary.source,
-                    "LookupDate": primary.date,
-                    "Lookups": ",".join(lk.id for lk in lks),
-                },
+                "fields": fields,
                 "tags": ["kindle", book_tag(primary.title)],
                 "options": {"allowDuplicate": True},
             }
@@ -366,6 +371,7 @@ def apply_new_cards(
     existing_index: dict[str, list[dict]],
     skipped: dict,
     batch_size: int = 40,
+    language: str | None = None,
 ) -> tuple[int, int, int]:
     """Cluster new lookups in batches and write the outcomes to Anki.
 
@@ -380,14 +386,14 @@ def apply_new_cards(
         payloads = [
             build_group_payload(stem, lks, existing_index) for stem, lks in batch
         ]
-        responses = cluster_groups(client, model, payloads)
+        responses = cluster_groups(client, model, payloads, language=language)
 
         for stem, lks in batch:
             response = responses.get(stem)
             if response is None:
                 print(f"  ! no response for stem {stem!r} — leaving for next run")
                 continue
-            result = build_notes(stem, lks, response)
+            result = build_notes(stem, lks, response, translate=bool(language))
 
             if result.notes:
                 anki("addNotes", notes=result.notes)
@@ -471,7 +477,7 @@ CARD_CSS = """\
 .definition { font-size: 22px; }
 .sentence { color: #555; font-style: italic; margin-top: 0.8em; }
 .word { font-size: 28px; font-weight: 600; }
-.polish { font-size: 20px; color: #444; margin-top: 0.2em; }
+.translation { font-size: 20px; color: #444; margin-top: 0.2em; }
 .source { color: #888; font-size: 14px; margin-top: 1em; }
 """
 
@@ -484,7 +490,7 @@ CARD_BACK = """\
 {{FrontSide}}
 <hr id=answer>
 <div class="word">{{Word}}</div>
-{{#Polish}}<div class="polish">{{Polish}}</div>{{/Polish}}
+{{#Translation}}<div class="translation">{{Translation}}</div>{{/Translation}}
 <div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
 
@@ -536,8 +542,6 @@ def save_skipped(data: dict) -> None:
 
 
 def load_env() -> None:
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return
     if not ENV_FILE.exists():
         return
     for line in ENV_FILE.read_text().splitlines():
@@ -548,7 +552,30 @@ def load_env() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
-CLUSTER_SYSTEM_PROMPT = """\
+def resolve_language(cli_value: str | None) -> str | None:
+    """Target translation language: CLI flag, else TRANSLATION_LANGUAGE in .env.
+
+    Returns None (no translation) when unset or explicitly "none".
+    """
+    value = (cli_value or os.environ.get("TRANSLATION_LANGUAGE") or "").strip()
+    if not value or value.lower() == "none":
+        return None
+    return value
+
+
+def cluster_system_prompt(language: str | None = None) -> str:
+    """System prompt for the clustering call.
+
+    A `translation` field is requested only when `language` is given; with no
+    language the cards stay monolingual.
+    """
+    translation_bullet = (
+        f"  - `translation`: a {language} translation of that same sense (shown "
+        "only on the back, so it carries no guessing constraint).\n"
+        if language
+        else ""
+    )
+    return f"""\
 You cluster a language learner's vocabulary lookups into flashcards.
 
 You receive a JSON array of stem-groups. Each group is one lemma (`stem`) the \
@@ -592,9 +619,7 @@ Each `new_cards` entry has:
 actually used, matching its part of speech. Monolingual English only. Do NOT \
 restate the headword, any inflected form of it, or an obvious cognate — the \
 learner must guess it from the definition. No examples, etymology, or labels.
-  - `polish`: a Polish translation of that same sense (shown only on the back, \
-so it carries no guessing constraint).
-  - `span`: a list of the exact substrings, copied VERBATIM from the primary \
+{translation_bullet}  - `span`: a list of the exact substrings, copied VERBATIM from the primary \
 context's sentence, to blank out on the card front. Each must occur \
 character-for-character in that sentence. Usually one piece (`["make off"]`). \
 For a separable phrasal verb split by its object, give each piece separately so \
@@ -605,71 +630,85 @@ Echo each group's `stem`. Return exactly one result per input group and exactly 
 one assignment per input context.
 """
 
-CLUSTER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "groups": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "stem": {"type": "string"},
-                    "new_cards": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "headword": {"type": "string"},
-                                "definition": {"type": "string"},
-                                "polish": {"type": "string"},
-                                "span": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
+def cluster_schema(with_translation: bool = False) -> dict:
+    """Structured-output schema for the clustering call.
+
+    Each new card requires a `translation` field only when translating.
+    """
+    card_props = {
+        "headword": {"type": "string"},
+        "definition": {"type": "string"},
+        "span": {"type": "array", "items": {"type": "string"}},
+    }
+    card_required = ["headword", "definition", "span"]
+    if with_translation:
+        card_props["translation"] = {"type": "string"}
+        card_required.append("translation")
+    return {
+        "type": "object",
+        "properties": {
+            "groups": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "stem": {"type": "string"},
+                        "new_cards": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": card_props,
+                                "required": card_required,
+                                "additionalProperties": False,
                             },
-                            "required": ["headword", "definition", "polish", "span"],
-                            "additionalProperties": False,
+                        },
+                        "assignments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "lookup_id": {"type": "string"},
+                                    "verdict": {
+                                        "type": "string",
+                                        "enum": ["new", "existing", "junk"],
+                                    },
+                                    "card_index": {"type": "integer"},
+                                    "reason": {"type": "string"},
+                                },
+                                "required": [
+                                    "lookup_id",
+                                    "verdict",
+                                    "card_index",
+                                    "reason",
+                                ],
+                                "additionalProperties": False,
+                            },
                         },
                     },
-                    "assignments": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "lookup_id": {"type": "string"},
-                                "verdict": {
-                                    "type": "string",
-                                    "enum": ["new", "existing", "junk"],
-                                },
-                                "card_index": {"type": "integer"},
-                                "reason": {"type": "string"},
-                            },
-                            "required": [
-                                "lookup_id",
-                                "verdict",
-                                "card_index",
-                                "reason",
-                            ],
-                            "additionalProperties": False,
-                        },
-                    },
+                    "required": ["stem", "new_cards", "assignments"],
+                    "additionalProperties": False,
                 },
-                "required": ["stem", "new_cards", "assignments"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["groups"],
-    "additionalProperties": False,
-}
+            }
+        },
+        "required": ["groups"],
+        "additionalProperties": False,
+    }
 
 
-def cluster_groups(client, model: str, groups: list[dict], effort: str | None = None):
+def cluster_groups(
+    client,
+    model: str,
+    groups: list[dict],
+    effort: str | None = None,
+    language: str | None = None,
+):
     """Send stem-groups to Claude; return {stem: {stem, new_cards, assignments}}.
 
     `effort` is omitted unless given — cheap models reject the parameter.
+    `language`, when set, asks for a translation field in that language.
     """
-    output_config = {"format": {"type": "json_schema", "schema": CLUSTER_SCHEMA}}
+    schema = cluster_schema(with_translation=bool(language))
+    output_config = {"format": {"type": "json_schema", "schema": schema}}
     if effort:
         output_config["effort"] = effort
     response = client.messages.create(
@@ -678,7 +717,7 @@ def cluster_groups(client, model: str, groups: list[dict], effort: str | None = 
         system=[
             {
                 "type": "text",
-                "text": CLUSTER_SYSTEM_PROMPT,
+                "text": cluster_system_prompt(language),
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -753,6 +792,12 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Claude model id")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument(
+        "--language",
+        metavar="NAME",
+        help="add a back-of-card translation in this language, e.g. 'French' "
+        "(default: no translation; falls back to TRANSLATION_LANGUAGE in .env)",
+    )
     args = parser.parse_args(argv)
 
     db_path = resolve_db(args.db)
@@ -819,7 +864,9 @@ def main(argv: list[str]) -> int:
     ensure_deck()
     client = anthropic.Anthropic()
 
-    print(f"\nClustering {len(new_lookups)} lookup(s) with {args.model}…")
+    language = resolve_language(args.language)
+    lang_note = f", translating to {language}" if language else ""
+    print(f"\nClustering {len(new_lookups)} lookup(s) with {args.model}{lang_note}…")
     added, updated, junked = apply_new_cards(
         client,
         args.model,
@@ -827,6 +874,7 @@ def main(argv: list[str]) -> int:
         existing_index,
         skipped,
         args.batch_size,
+        language,
     )
     save_skipped(skipped)
 

@@ -33,7 +33,6 @@ def test_new_verdict_builds_one_note_with_all_fields():
             {
                 "headword": "afflict",
                 "definition": "to cause suffering to",
-                "polish": "trapić",
                 "span": "afflict",
             }
         ],
@@ -48,10 +47,10 @@ def test_new_verdict_builds_one_note_with_all_fields():
     note = result.notes[0]
     assert note["deckName"] == DECK_NAME
     assert note["modelName"] == MODEL_NAME
+    # No translation by default — the Translation field is absent entirely.
     assert note["fields"] == {
         "Stem": "afflict",
         "Word": "afflict",
-        "Polish": "trapić",
         "Definition": "to cause suffering to",
         "Sentence": "Diseases that _____ us.",
         "Source": "Zebras — Sapolsky",
@@ -60,6 +59,28 @@ def test_new_verdict_builds_one_note_with_all_fields():
     }
     assert result.existing == []
     assert result.junk == []
+
+
+def test_translate_true_adds_translation_field():
+    lookups = [mklookup("L1", stem="afflict", sentence="Diseases that afflict us.")]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {
+                "headword": "afflict",
+                "definition": "to cause suffering to",
+                "translation": "trapić",
+                "span": "afflict",
+            }
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response, translate=True)
+
+    assert result.notes[0]["fields"]["Translation"] == "trapić"
 
 
 def test_shared_card_joins_ids_and_primary_is_earliest():
@@ -91,7 +112,7 @@ def test_shared_card_joins_ids_and_primary_is_earliest():
             {
                 "headword": "bank",
                 "definition": "land alongside a river",
-                "polish": "brzeg",
+                "translation": "brzeg",
                 "span": "banks",
             }
         ],

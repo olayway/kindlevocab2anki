@@ -43,6 +43,38 @@ def test_proper_noun_is_junk(claude):
     assert out["winston"]["new_cards"] == []
 
 
+def test_language_populates_translation_field(claude):
+    groups = [
+        {
+            "stem": "afflict",
+            "contexts": [
+                one_context("L1", "The diseases that afflict us have changed.")
+            ],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups, language="French")
+
+    card = out["afflict"]["new_cards"][0]
+    assert card["translation"].strip(), "translation must be present and non-empty"
+
+
+def test_no_language_omits_translation_field(claude):
+    groups = [
+        {
+            "stem": "afflict",
+            "contexts": [
+                one_context("L1", "The diseases that afflict us have changed.")
+            ],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)  # no language
+
+    card = out["afflict"]["new_cards"][0]
+    assert "translation" not in card
+
+
 def test_polysemy_splits_into_two_cards_with_verbatim_spans(claude):
     contexts = [
         one_context("L1", "We sat on the grassy bank of the river."),

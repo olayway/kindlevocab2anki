@@ -7,7 +7,8 @@ lookup to the phrasal verb or expression it really belongs to, and merges
 repeat lookups of the same sense.
 
 You see a definition and the sentence with the answer blanked out; you recall
-the word. The back confirms it with a Polish translation of that same sense.
+the word. The back confirms it — and, if you turn on translations, adds a
+translation of that same sense into your native language.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -23,9 +24,12 @@ the word. The back confirms it with a Polish translation of that same sense.
 └─────────────────────────────────────────────────────────┘
 ```
 
-The Polish is deliberately on the **back only**. Putting it on the front would
+Translations are **off by default** and configurable: pass `--language French`
+(or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that
+language. It's deliberately on the **back only** — putting it on the front would
 turn recall into translation; here it just confirms you landed on the right
-sense once you've already committed to an answer.
+sense once you've already committed to an answer. Leave it off and the cards
+stay fully monolingual.
 
 ## Sense-aware, not word-aware
 
@@ -34,7 +38,8 @@ sentence. This tool does not collapse those to one card per lemma. Instead
 Claude clusters them:
 
 - **Polysemy → sense split.** `bank` met at a river and `bank` met downtown
-  become **two** cards, each with its own definition, sentence, and Polish. This
+  become **two** cards, each with its own definition, sentence, and (if enabled)
+  translation. This
   holds against cards **already in the deck** too: if you've carded `sordid` as
   "morally wrong" and later look it up meaning "squalid", that's a new card, not
   a match to the old one.
@@ -88,6 +93,7 @@ out what's already handled, so Anki must be running even for a dry run.)
 | `--db PATH` | Read a specific `vocab.db` instead of auto-detecting. |
 | `--model ID` | Claude model (default `claude-opus-5`). |
 | `--batch-size N` | Stem-groups per API request (default 40). |
+| `--language NAME` | Add a back-of-card translation in this language, e.g. `French`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. |
 
 ```sh
 uv run kindle_anki.py --book "1984" --book "Zebras" --apply
@@ -128,8 +134,9 @@ and the **existing** cards per stem (for dedup context). A lookup is *new* only
 if its id is neither consumed nor in `skipped.json`.
 
 **5. Cluster.** New lookups are grouped by stem and sent to Claude in batches.
-For each group Claude returns new cards (headword, definition, Polish, and the
-exact span to blank) plus a verdict for every lookup: **new** (maps to one of
+For each group Claude returns new cards (headword, definition, the exact span to
+blank, and — when `--language` is set — a translation) plus a verdict for every
+lookup: **new** (maps to one of
 the new cards), **existing** (same sense as a card already in the deck), or
 **junk**. Structured outputs pin the response to a schema so it can't come back
 malformed. The system prompt is marked for prompt caching.
@@ -145,9 +152,11 @@ On the first `--apply` the script creates, if missing:
 
 - **Deck** `English::Kindle`
 - **Note type** `Kindle Vocab` with fields
-  `Stem`, `Word`, `Polish`, `Definition`, `Sentence`, `Source`, `LookupDate`,
-  `Lookups`, and a single **Production** card template (definition + blanked
-  sentence on the front; word, Polish, and source on the back).
+  `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`,
+  `LookupDate`, `Lookups`, and a single **Production** card template (definition
+  + blanked sentence on the front; word, translation, and source on the back).
+  The `Translation` field stays empty unless you run with `--language`, and the
+  template hides it when empty.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the
@@ -239,7 +248,7 @@ reprocessed on the next `--apply`. To rebuild the whole deck, use `--reset`.
 |---|---|
 | `kindle_anki.py` | the whole tool — one file, PEP 723 inline dependencies |
 | `tests/` | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals) |
-| `.env` | `ANTHROPIC_API_KEY` (git-ignored, mode 600) |
+| `.env` | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
 | `vocab.db` | cached copy of the Kindle database (git-ignored) |
 | `skipped.json` | junk lookup ids → reason (git-ignored) |
 
