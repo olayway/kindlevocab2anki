@@ -66,7 +66,7 @@ Claude clusters them:
 | | |
 |---|---|
 | **uv** | `brew install uv` — runs the script and its dependencies; nothing to install manually |
-| **Anki** | running, with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on, listening on `127.0.0.1:8765` |
+| **Anki** | running, with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on, listening on `127.0.0.1:8765` — *or* skip both and use `--export deck.apkg` to write a package you import by hand ([Offline export](#offline-export)) |
 | **Anthropic API key** | in `.env` as `ANTHROPIC_API_KEY=...` (mode `600`, git-ignored) |
 | **Kindle** | with **Vocabulary Builder** switched on, connected by USB and mounted at `/Volumes/Kindle` at least once |
 
@@ -120,10 +120,48 @@ out what's already handled, so Anki must be running even for a dry run.)
 | `--model ID` | Claude model (default `claude-opus-5`). |
 | `--batch-size N` | Stem-groups per API request (default 40). |
 | `--language NAME` | Add a back-of-card translation in this language, e.g. `French`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. |
+| `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export). |
 
 ```sh
 uv run kindle_anki.py --book "1984" --book "Zebras" --apply
 ```
+
+## Offline export
+
+Don't want to run Anki with AnkiConnect — or want to card on a phone with no
+desktop Anki at all? Pass `--export deck.apkg` and the tool writes a standard
+Anki package you import by hand (**File → Import**) instead of talking to a
+running Anki:
+
+```sh
+# dry run, offline — same per-book breakdown, reads deck_state.json
+uv run kindle_anki.py --export deck.apkg
+
+# cluster with Claude and write the package
+uv run kindle_anki.py --export deck.apkg --apply
+```
+
+Everything that makes the live path sense-aware works identically here — the
+only thing that changes is where state lives. With no running deck to query,
+**`deck_state.json`** becomes the source of truth: it records every card and
+the lookup ids it consumed, so re-runs still skip what you already have, split
+senses, and promote expressions exactly as before. It's the offline stand-in
+for the `Lookups` field the live path reads off your cards.
+
+The `.apkg` is a **cumulative snapshot** of the whole deck, not a per-run diff.
+Each card carries a stable GUID derived from its first lookup, so **re-importing
+a regenerated package updates cards in place — it never duplicates them.** Import
+the latest `deck.apkg` after each `--apply` and your deck stays in sync.
+
+The cards are byte-for-byte the same note type, template, and CSS as the live
+path, so switching between the two is seamless. Anthropic API key requirements
+are unchanged; Anki and AnkiConnect are simply not needed until import time.
+
+> [!NOTE]
+> Offline mode can't self-heal on manual edits the way the live path does: if
+> you delete a card *in Anki*, `deck_state.json` doesn't know, so that lookup
+> won't come back on the next run. Edit `deck_state.json` (or `--reset`) if you
+> need to force a rebuild.
 
 ## How it works
 
@@ -213,7 +251,9 @@ cost nothing for lookups you already have — and the pipeline **self-heals**:
 delete or edit a card in Anki and its lookup ids leave the consumed set, so
 they're reprocessed on the next run.
 
-**`skipped.json`** (git-ignored) is the only local state, and holds junk only:
+**`skipped.json`** (git-ignored) is the only local state on the live path, and
+holds junk only (offline `--export` adds one more, `deck_state.json`, described
+in [Offline export](#offline-export)):
 
 ```json
 { "a1b2c3": "proper noun", "d4e5f6": "ocr artefact" }
@@ -238,7 +278,8 @@ that are **deselected by default** (they cost money):
 
 ```sh
 # fast, free, offline — pure logic + mocked Anki + real sqlite/tmp files
-uv run --with pytest pytest
+# (add --with genanki to also exercise the real .apkg write; it's skipped otherwise)
+uv run --with pytest --with genanki pytest
 
 # behavioral evals against the real API (cheap model), opt-in
 uv run --with pytest --with anthropic pytest -m llm
@@ -277,6 +318,7 @@ reprocessed on the next `--apply`. To rebuild the whole deck, use `--reset`.
 | `.env` | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
 | `vocab.db` | cached copy of the Kindle database (git-ignored) |
 | `skipped.json` | junk lookup ids → reason (git-ignored) |
+| `deck_state.json` | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored) |
 
 ## A note on backups
 

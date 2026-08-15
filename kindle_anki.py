@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["anthropic>=0.70"]
+# dependencies = ["anthropic>=0.70", "genanki>=0.13"]
 # ///
 """Import Kindle Vocabulary Builder lookups into Anki as production cards.
 
@@ -9,8 +9,12 @@ Reads vocab.db from a mounted Kindle (or a local cache), generates a
 context-aware English definition for each new word with the Claude API, and
 creates one Anki note per lemma via AnkiConnect.
 
+Pass --export deck.apkg to write an offline Anki package instead of talking to
+a running Anki: state then lives in a local deck_state.json rather than the
+deck, so the same sense-aware dedup runs with nothing installed but this script.
+
 Default action is a dry run. Pass --apply to actually call Claude and write
-notes to Anki.
+notes (to Anki, or to the .apkg when --export is given).
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 KINDLE_DB = Path("/Volumes/Kindle/system/vocabulary/vocab.db")
 CACHE_DB = SCRIPT_DIR / "vocab.db"
 SKIPPED_JSON = SCRIPT_DIR / "skipped.json"
+STATE_JSON = SCRIPT_DIR / "deck_state.json"  # offline (--export) source of truth
 ENV_FILE = SCRIPT_DIR / ".env"
 
 ANKI_URL = "http://127.0.0.1:8765"
@@ -55,6 +60,11 @@ BLANK = "_____"
 
 DEFAULT_MODEL = "claude-opus-5"
 BATCH_SIZE = 40
+
+# Fixed ids so genanki reuses the same note type / deck across runs and
+# re-imports of a regenerated .apkg update in place instead of duplicating.
+GENANKI_MODEL_ID = 1607392319
+GENANKI_DECK_ID = 2059400110
 
 
 # --------------------------------------------------------------------------
@@ -381,12 +391,16 @@ def apply_new_cards(
     skipped: dict,
     batch_size: int = 40,
     language: str | None = None,
+    sink: "Sink | None" = None,
 ) -> tuple[int, int, int]:
-    """Cluster new lookups in batches and write the outcomes to Anki.
+    """Cluster new lookups in batches and write the outcomes through `sink`.
 
     Returns (added, updated, junked). `skipped` is mutated and persisted after
-    every batch so an interrupted run resumes cleanly.
+    every batch so an interrupted run resumes cleanly. `sink` defaults to the
+    live AnkiConnect backend; pass an `ApkgSink` to write an offline package.
     """
+    if sink is None:
+        sink = LiveSink()
     stem_items = list(group_by_stem(new_lookups).items())
     added = updated = junked = 0
 
@@ -405,7 +419,7 @@ def apply_new_cards(
             result = build_notes(stem, lks, response, translate=bool(language))
 
             if result.notes:
-                anki("addNotes", notes=result.notes)
+                sink.add_notes(result.notes)
                 added += len(result.notes)
 
             entries = existing_index.get(stem, [])
@@ -414,7 +428,7 @@ def apply_new_cards(
                 if not isinstance(idx, int) or not 0 <= idx < len(entries):
                     print(f"  ! {stem!r}: bad existing index {idx} — skipping")
                     continue
-                record_existing_link(entries[idx], link["lookup_id"])
+                sink.link_existing(entries[idx], link["lookup_id"])
                 updated += 1
 
             for j in result.junk:
@@ -423,6 +437,7 @@ def apply_new_cards(
 
         save_skipped(skipped)
 
+    sink.finalize()
     return added, updated, junked
 
 
@@ -551,6 +566,167 @@ def ensure_deck() -> None:
     if DECK_NAME not in anki("deckNames"):
         anki("createDeck", deck=DECK_NAME)
         print(f"Created deck {DECK_NAME!r}")
+
+
+# --------------------------------------------------------------------------
+# sinks — where apply_new_cards sends its two side effects
+# --------------------------------------------------------------------------
+
+
+class Sink:
+    """Write target for clustered outcomes. `add_notes` commits new cards;
+    `link_existing` records that a lookup belongs to a card already present;
+    `finalize` flushes anything buffered. The live backend talks to Anki now;
+    the offline one buffers and writes an .apkg on finalize.
+    """
+
+    def add_notes(self, notes: list[dict]) -> None:
+        raise NotImplementedError
+
+    def link_existing(self, entry: dict, lookup_id: str) -> None:
+        raise NotImplementedError
+
+    def finalize(self) -> None:
+        pass
+
+
+class LiveSink(Sink):
+    """Write straight to a running Anki over AnkiConnect (the default)."""
+
+    def add_notes(self, notes: list[dict]) -> None:
+        anki("addNotes", notes=notes)
+
+    def link_existing(self, entry: dict, lookup_id: str) -> None:
+        record_existing_link(entry, lookup_id)
+
+
+# --------------------------------------------------------------------------
+# offline export — deck_state.json + a genanki .apkg
+# --------------------------------------------------------------------------
+
+
+def load_state() -> list[dict]:
+    """Card records from prior --export runs; [] when the file is absent.
+
+    Each record is a card: its fields plus the lookup ids it consumed. It is
+    the offline stand-in for the live deck, so `card_id` doubles as the note id
+    handed to build_existing_index and the value link_existing targets.
+    """
+    if not STATE_JSON.exists():
+        return []
+    try:
+        data = json.loads(STATE_JSON.read_text())
+    except json.JSONDecodeError as exc:
+        raise Fatal(f"{STATE_JSON} is not valid JSON ({exc}). Fix or delete it.")
+    if not isinstance(data, list):
+        raise Fatal(f"{STATE_JSON} must contain a JSON array of card records.")
+    return data
+
+
+def save_state(cards: list[dict]) -> None:
+    STATE_JSON.write_text(json.dumps(cards, indent=2, ensure_ascii=False) + "\n")
+
+
+def card_id_of(note: dict) -> str:
+    """Stable identity for a card: its first (earliest-assigned) lookup id.
+
+    A lookup belongs to exactly one card and this id is never reordered as more
+    lookups are linked, so it stays unique and stable across runs.
+    """
+    return note["fields"]["Lookups"].split(",")[0]
+
+
+def state_to_notes_info(cards: list[dict]) -> list[dict]:
+    """Adapt stored card records into the notesInfo shape the read-side logic
+    (consumed_ids / build_existing_index / determine_new_lookups) expects, so
+    the offline path reuses it unchanged. `card_id` stands in for `noteId`.
+    """
+    return [
+        {
+            "noteId": card["card_id"],
+            "fields": {name: {"value": card["fields"].get(name, "")} for name in FIELDS},
+        }
+        for card in cards
+    ]
+
+
+class ApkgSink(Sink):
+    """Buffer new cards, mutate offline state, write an .apkg on finalize.
+
+    Seeded with the card records loaded from deck_state.json so `link_existing`
+    can append to a prior card. The .apkg is a full cumulative snapshot of every
+    card in the state — stable GUIDs make re-importing it update the deck in
+    place rather than duplicate — so one file is always the whole deck.
+    """
+
+    def __init__(self, out_path: Path, state: list[dict]):
+        self.out_path = out_path
+        self.state = state
+        self.by_id = {c["card_id"]: c for c in state}
+
+    def add_notes(self, notes: list[dict]) -> None:
+        for note in notes:
+            cid = card_id_of(note)
+            record = {
+                "card_id": cid,
+                "fields": dict(note["fields"]),
+                "tags": list(note.get("tags", [])),
+            }
+            self.state.append(record)
+            self.by_id[cid] = record
+
+    def link_existing(self, entry: dict, lookup_id: str) -> None:
+        record = self.by_id.get(entry["note_id"])
+        if record is None:  # pragma: no cover - guarded by build_existing_index
+            return
+        ids = [p for p in record["fields"].get("Lookups", "").split(",") if p]
+        if lookup_id not in ids:
+            ids.append(lookup_id)
+        record["fields"]["Lookups"] = ",".join(ids)
+
+    def finalize(self) -> None:
+        save_state(self.state)
+        write_apkg(self.out_path, self.state)
+
+
+def build_genanki_model():
+    """genanki model mirroring the AnkiConnect note type, so both paths
+    produce visually identical cards from the same fields/template/CSS."""
+    try:
+        import genanki
+    except ImportError as exc:  # pragma: no cover - uv installs this
+        raise Fatal(f"The genanki package is unavailable: {exc}") from exc
+    return genanki.Model(
+        GENANKI_MODEL_ID,
+        MODEL_NAME,
+        fields=[{"name": name} for name in FIELDS],
+        templates=[{"name": "Production", "qfmt": CARD_FRONT, "afmt": CARD_BACK}],
+        css=CARD_CSS,
+    )
+
+
+def write_apkg(out_path: Path, notes: list[dict]) -> None:
+    """Write card records to an .apkg at `out_path`.
+
+    Each record needs `fields` (keyed by FIELDS) and optional `tags`; the GUID
+    is derived from the card's first lookup id so re-imports stay idempotent.
+    """
+    import genanki
+
+    model = build_genanki_model()
+    deck = genanki.Deck(GENANKI_DECK_ID, DECK_NAME)
+    for note in notes:
+        fields = note["fields"]
+        deck.add_note(
+            genanki.Note(
+                model=model,
+                fields=[fields.get(name, "") for name in FIELDS],
+                tags=note.get("tags", []),
+                guid=genanki.guid_for(card_id_of(note)),
+            )
+        )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    genanki.Package(deck).write_to_file(str(out_path))
 
 
 # --------------------------------------------------------------------------
@@ -854,7 +1030,15 @@ def main(argv: list[str]) -> int:
         help="add a back-of-card translation in this language, e.g. 'French' "
         "(default: no translation; falls back to TRANSLATION_LANGUAGE in .env)",
     )
+    parser.add_argument(
+        "--export",
+        metavar="FILE.apkg",
+        help="offline mode: read/write state in deck_state.json and write cards "
+        "to this Anki package instead of talking to a running Anki",
+    )
     args = parser.parse_args(argv)
+    export_path = Path(args.export).expanduser() if args.export else None
+    offline = export_path is not None
 
     db_path = resolve_db(args.db)
     lookups = read_lookups(db_path)
@@ -869,7 +1053,15 @@ def main(argv: list[str]) -> int:
         raise Fatal("No lookups matched the book filter.")
 
     if args.reset:
-        if args.apply:
+        if not args.apply:
+            target = "deck_state.json" if offline else "all deck notes"
+            print(f"--reset: would delete {target} and clear skipped.json")
+        elif offline:
+            existed = STATE_JSON.exists()
+            save_state([])
+            save_skipped({})
+            print(f"--reset: cleared deck_state.json ({'was present' if existed else 'was empty'}) and skipped.json")
+        else:
             ensure_model()
             ensure_deck()
             ids = anki("findNotes", query=f'deck:"{DECK_NAME}"')
@@ -877,12 +1069,16 @@ def main(argv: list[str]) -> int:
                 anki("deleteNotes", notes=ids)
             save_skipped({})
             print(f"--reset: deleted {len(ids)} note(s), cleared skipped.json")
-        else:
-            print("--reset: would delete all deck notes and clear skipped.json")
 
-    skipped = {} if (args.reset and args.apply) else load_skipped()
+    wiped = args.reset and args.apply
+    skipped = {} if wiped else load_skipped()
     stems = sorted({lk.stem.lower() for lk in selected})
-    notes_info = [] if (args.reset and args.apply) else fetch_notes_for_stems(stems)
+    if offline:
+        state = [] if wiped else load_state()
+        notes_info = state_to_notes_info(state)
+    else:
+        state = None
+        notes_info = [] if wiped else fetch_notes_for_stems(stems)
     existing_index = build_existing_index(notes_info)
 
     new_lookups = determine_new_lookups(selected, notes_info, set(skipped))
@@ -916,8 +1112,12 @@ def main(argv: list[str]) -> int:
     except ImportError as exc:  # pragma: no cover - uv installs this
         raise Fatal(f"The anthropic package is unavailable: {exc}") from exc
 
-    ensure_model()
-    ensure_deck()
+    if offline:
+        sink: Sink = ApkgSink(export_path, state)
+    else:
+        ensure_model()
+        ensure_deck()
+        sink = LiveSink()
     client = anthropic.Anthropic()
 
     language = resolve_language(args.language)
@@ -931,14 +1131,23 @@ def main(argv: list[str]) -> int:
         skipped,
         args.batch_size,
         language,
+        sink=sink,
     )
     save_skipped(skipped)
 
-    print(
-        f"\nDone. {added} card(s) added to {DECK_NAME}, "
-        f"{updated} lookup(s) linked to existing cards, "
-        f"{junked} skipped as junk."
-    )
+    if offline:
+        print(
+            f"\nDone. {added} new card(s); {updated} lookup(s) linked to existing "
+            f"cards, {junked} skipped as junk.\n"
+            f"Wrote {len(state)} card(s) to {export_path} — import it into Anki "
+            f"(File → Import). Re-importing updates in place, never duplicates."
+        )
+    else:
+        print(
+            f"\nDone. {added} card(s) added to {DECK_NAME}, "
+            f"{updated} lookup(s) linked to existing cards, "
+            f"{junked} skipped as junk."
+        )
     return 0
 
 

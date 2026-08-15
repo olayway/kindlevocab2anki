@@ -1,5 +1,7 @@
 .env
 *.db
+*.apkg
 skipped.json
+deck_state.json
 __pycache__/
 .pytest_cache/
