@@ -31,7 +31,7 @@ Each line pairs a behavior with the reasoning behind it; follow the link for the
 - **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
 - **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
 - **Resilient writes** — read-only AnkiConnect calls retry through a dropped connection; mutating ones fail fast instead, because a blind retry could double-add a note. An interrupted run resumes cleanly from what's already saved. → [How it works](#how-it-works)
-- **English-only, on purpose** — only `en` lookups are read. Keeping one language keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled.
+- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database *and* the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. → [Languages](#languages)
 - **Auto database handling** — the Kindle's `vocab.db` is copied off the device to a local cache before anything reads it (SQLite on a removable FAT volume shouldn't be opened in place), so later runs work with the Kindle unplugged; `--db PATH` overrides detection. → [How it works](#how-it-works)
 - **One file, zero install** — the whole tool is a single script with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, so `uv run kindle_anki.py` fetches everything on first run and there's nothing to `pip install`. → [Files](#files)
 
@@ -44,6 +44,30 @@ Kindle records one _lookup_ per tap — the lemma, the surface form, and the sen
 - **Expression promotion.** A tap on `make` inside "they _made off_ with it" becomes a card whose headword is **make off** — the expression Kindle can't look up directly.
 - **Same sense → one card.** Three lookups of the same meaning share a single card; the earliest sentence is the one shown, and every lookup is recorded on the card as provenance.
 - **Junk is dropped.** Proper nouns, names, foreign words, and OCR artefacts are rejected and remembered so they aren't re-judged next run.
+
+## Languages
+
+Two independent axes control language:
+
+- **`--learning CODE`** — the language you're **studying**. It gates which Kindle lookups are read (via `WORDS.lang`), sets the language the definitions are written in, and picks the base-form rules (how a headword is normalized) and the blanking strategy. Default `en`.
+- **`--language NAME`** — your **native** language, glossed on the **back** of the card only. Optional and off by default.
+
+They compose freely: `--learning fr --language Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back. Leave `--language` off and the cards stay monolingual in the learning language.
+
+```sh
+# Study French, monolingual
+uv run kindle_anki.py --learning fr --apply
+
+# Study French, Polish on the back
+uv run kindle_anki.py --learning fr --language Polish --apply
+```
+
+Built-in learning languages: `en`, `fr`, `de`, `es`, `ja`. Adding one is a single `LanguageProfile` entry in `LANGUAGES` (a `code`, a display `name`, a `script` class, and a one-line `morphology` rule).
+
+**Known limitations.** Space-delimited, cased, suffix-inflecting languages (English, French, German, Spanish, …) use the `spaced` blanking strategy and are well-supported. Japanese/Chinese/Thai use a `cjk` strategy that blanks the exact span verbatim (no word-boundary or inflection fallback). Two rough edges remain and are worth knowing:
+
+- All cards still go to the **`English::Kindle`** deck regardless of learning language — rename or move it in Anki if you want per-language decks.
+- Book tags are ASCII-slugged, so a title in a non-Latin script collapses to `book::unknown`.
 
 ## Requirements
 
@@ -92,7 +116,8 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                      |
 | `--model ID`         | Claude model (default `claude-opus-5`).                                                                                                                                    |
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                  |
-| `--language NAME`    | Add a back-of-card translation in this language, e.g. `French`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`.                               |
+| `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages). |
+| `--language NAME`    | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`. |
 | `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                      |
 
 ```sh
@@ -123,7 +148,7 @@ The cards are byte-for-byte the same note type, template, and CSS as the live pa
 ## How it works
 
 ```
-Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every en lookup (with its id)
+Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the learning lang (with its id)
                                               │
                         book filter ──────────┤
                                               ▼

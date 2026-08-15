@@ -56,7 +56,7 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_cluster(client, model, payloads, language=None):
+    def fake_cluster(client, model, payloads, learning=None, language=None):
         assert [p["stem"] for p in payloads] == ["bank", "winston", "make"]
         assert language is None  # no --language -> monolingual
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
@@ -110,7 +110,7 @@ def test_language_is_threaded_and_translation_written(tmp_path, monkeypatch):
     }
     calls = []
 
-    def fake_cluster(client, model, payloads, language=None):
+    def fake_cluster(client, model, payloads, learning=None, language=None):
         assert language == "French"  # --language French threaded through
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
 

@@ -6,8 +6,10 @@
 """Import Kindle Vocabulary Builder lookups into Anki as production cards.
 
 Reads vocab.db from a mounted Kindle (or a local cache), generates a
-context-aware English definition for each new word with the Claude API, and
-creates one Anki note per lemma via AnkiConnect.
+context-aware definition for each new word with the Claude API, and creates
+one Anki note per lemma via AnkiConnect. The learning language (English by
+default; --learning fr, etc.) gates which lookups are read and sets the
+language definitions are written in.
 
 Pass --export deck.apkg to write an offline Anki package instead of talking to
 a running Anki: state then lives in a local deck_state.json rather than the
@@ -60,6 +62,70 @@ BLANK = "_____"
 
 DEFAULT_MODEL = "claude-opus-5"
 BATCH_SIZE = 40
+
+
+# --------------------------------------------------------------------------
+# languages
+# --------------------------------------------------------------------------
+#
+# Two independent axes:
+#   * the LEARNING language (--learning) is the language you're studying. It
+#     gates which vocab.db lookups are read (Kindle's WORDS.lang), and it sets
+#     the headword/definition rules and the blank_out strategy.
+#   * the TRANSLATION language (--language) is your native tongue, glossed on
+#     the back of the card only. It is orthogonal to the learning language.
+
+
+@dataclass(frozen=True)
+class LanguageProfile:
+    code: str  # Kindle WORDS.lang value → the SQL gate
+    name: str  # human name injected into the prompt ("French")
+    script: str  # "spaced" | "cjk" → picks the blank_out strategy
+    morphology: str  # prompt fragment: native base-form + expression rules
+
+
+LANGUAGES = {
+    "en": LanguageProfile(
+        "en",
+        "English",
+        "spaced",
+        'verbs to the bare infinitive ("outdid" → "outdo", "ran off" → "run '
+        'off"), nouns singular; promote phrasal verbs to the whole expression '
+        '("make off with").',
+    ),
+    "fr": LanguageProfile(
+        "fr",
+        "French",
+        "spaced",
+        'verbs to the infinitive ("mangeait" → "manger"), adjectives to the '
+        'masculine singular ("heureuse" → "heureux"), nouns singular without '
+        'article; promote locutions to the whole expression ("faire la queue").',
+    ),
+    "de": LanguageProfile(
+        "de",
+        "German",
+        "spaced",
+        "verbs to the infinitive, reattaching separable prefixes "
+        '("machte … auf" → "aufmachen"); nouns singular, capitalised.',
+    ),
+    "es": LanguageProfile(
+        "es",
+        "Spanish",
+        "spaced",
+        'verbs to the infinitive ("comía" → "comer"), adjectives to the '
+        "masculine singular, nouns singular without article; promote locutions "
+        "to the whole expression.",
+    ),
+    "ja": LanguageProfile(
+        "ja",
+        "Japanese",
+        "cjk",
+        "verbs and adjectives to their dictionary form (辞書形). There is no "
+        "word spacing, so each span is an exact substring — do not split on "
+        "whitespace.",
+    ),
+}
+DEFAULT_LEARNING = LANGUAGES["en"]
 
 # Fixed ids so genanki reuses the same note type / deck across runs and
 # re-imports of a regenerated .apkg update in place instead of duplicating.
@@ -135,7 +201,7 @@ def resolve_db(explicit: str | None) -> Path:
     return CACHE_DB
 
 
-def read_lookups(db_path: Path) -> list[Lookup]:
+def read_lookups(db_path: Path, lang: str = "en") -> list[Lookup]:
     uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
@@ -152,9 +218,10 @@ def read_lookups(db_path: Path) -> list[Lookup]:
             FROM LOOKUPS l
             JOIN WORDS w      ON l.word_key = w.id
             LEFT JOIN BOOK_INFO b ON l.book_key = b.id
-            WHERE w.lang = 'en'
+            WHERE w.lang = ?
             ORDER BY l.timestamp ASC
-            """
+            """,
+            (lang,),
         ).fetchall()
     finally:
         conn.close()
@@ -237,7 +304,7 @@ def matches_books(lk: Lookup, patterns: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
-def blank_out(sentence: str, span, word: str, stem: str) -> str:
+def blank_out(sentence: str, span, word: str, stem: str, script: str = "spaced") -> str:
     """Replace the answer with a blank; try Claude's span(s), then word, then stem.
 
     `span` is the exact surface span Claude asked us to hide. It may be a
@@ -246,9 +313,24 @@ def blank_out(sentence: str, span, word: str, stem: str) -> str:
     "she tied her hair up" → ["tied", "up"]). Every piece must match verbatim,
     or we fall back rather than emit a half-blanked sentence. If nothing
     matches, leave the sentence intact rather than mangle it.
+
+    `script` selects the matching strategy. "spaced" (Latin, Cyrillic, …) uses
+    word boundaries, case-insensitivity, and a suffix-inflection fallback.
+    "cjk" (Japanese, Chinese, Thai) has no word boundaries or case, so it
+    matches the exact span verbatim and skips the inflection fallback entirely.
     """
     parts = [span] if isinstance(span, str) else list(span or [])
     parts = [p for p in parts if p]
+    if script == "cjk":
+        # No word boundaries, no case, no suffix inflation: verbatim only.
+        if not parts:
+            return sentence
+        blanked = sentence
+        for part in parts:
+            if part not in blanked:
+                return sentence  # all-or-nothing, same contract as below
+            blanked = blanked.replace(part, BLANK)
+        return blanked
     if parts:
         # Exact surface form(s) — match verbatim, no inflection expansion.
         blanked = sentence
@@ -317,7 +399,11 @@ class BuildResult:
 
 
 def build_notes(
-    stem: str, lookups: list[Lookup], response: dict, translate: bool = False
+    stem: str,
+    lookups: list[Lookup],
+    response: dict,
+    translate: bool = False,
+    script: str = "spaced",
 ) -> BuildResult:
     """Turn Claude's per-group response into note payloads + outcomes.
 
@@ -363,6 +449,7 @@ def build_notes(
                 card.get("span", []),
                 primary.word,
                 primary.stem,
+                script,
             ),
             "Source": primary.source,
             "LookupDate": primary.date,
@@ -391,6 +478,7 @@ def apply_new_cards(
     skipped: dict,
     batch_size: int = 40,
     language: str | None = None,
+    learning: LanguageProfile = DEFAULT_LEARNING,
     sink: "Sink | None" = None,
 ) -> tuple[int, int, int]:
     """Cluster new lookups in batches and write the outcomes through `sink`.
@@ -409,14 +497,22 @@ def apply_new_cards(
         payloads = [
             build_group_payload(stem, lks, existing_index) for stem, lks in batch
         ]
-        responses = cluster_groups(client, model, payloads, language=language)
+        responses = cluster_groups(
+            client, model, payloads, learning=learning, language=language
+        )
 
         for stem, lks in batch:
             response = responses.get(stem)
             if response is None:
                 print(f"  ! no response for stem {stem!r} — leaving for next run")
                 continue
-            result = build_notes(stem, lks, response, translate=bool(language))
+            result = build_notes(
+                stem,
+                lks,
+                response,
+                translate=bool(language),
+                script=learning.script,
+            )
 
             if result.notes:
                 sink.add_notes(result.notes)
@@ -775,11 +871,27 @@ def resolve_language(cli_value: str | None) -> str | None:
     return value
 
 
-def cluster_system_prompt(language: str | None = None) -> str:
+def resolve_learning(cli_value: str | None) -> LanguageProfile:
+    """The language being studied: CLI flag, else LEARNING_LANGUAGE in .env, else English.
+
+    Accepts a code ("fr") case-insensitively; raises Fatal on an unknown one.
+    """
+    code = (cli_value or os.environ.get("LEARNING_LANGUAGE") or "en").strip().lower()
+    if code not in LANGUAGES:
+        known = ", ".join(sorted(LANGUAGES))
+        raise Fatal(f"Unknown --learning {code!r}. Known languages: {known}.")
+    return LANGUAGES[code]
+
+
+def cluster_system_prompt(
+    learning: LanguageProfile = DEFAULT_LEARNING, language: str | None = None
+) -> str:
     """System prompt for the clustering call.
 
-    A `translation` field is requested only when `language` is given; with no
-    language the cards stay monolingual.
+    `learning` is the language being studied — it sets the headword/definition
+    rules and the language definitions are written in. A `translation` field is
+    requested only when `language` (the native/back-of-card gloss) is given;
+    with no language the cards stay monolingual in the learning language.
     """
     translation_bullet = (
         f"  - `translation`: a {language} translation of that same sense (shown "
@@ -788,7 +900,7 @@ def cluster_system_prompt(language: str | None = None) -> str:
         else ""
     )
     return f"""\
-You cluster a language learner's vocabulary lookups into flashcards.
+You cluster a {learning.name} learner's vocabulary lookups into flashcards.
 
 You receive a JSON array of stem-groups. Each group is one lemma (`stem`) the \
 learner looked up, with:
@@ -837,18 +949,18 @@ lookup meaning "dirty/squalid" is a new card, not "existing".
 the FIRST of the contexts that map to it (they are given earliest-first); draw \
 the card's `span` from that sentence (see below).
   - If a lookup's sense is really part of a multi-word expression or phrasal \
-verb (e.g. the stem "make" used as "make off with"), set that card's \
-`headword` to the whole expression, not the bare stem. Otherwise `headword` is \
-the ordinary dictionary form of the word: verbs as the bare infinitive/base form \
-(e.g. "outdid" → "outdo", "ran off" → "run off"), nouns singular, never an \
-inflected form as it appeared in the sentence.
+verb, set that card's `headword` to the whole expression, not the bare stem. \
+Otherwise `headword` is the ordinary dictionary form of the word. For \
+{learning.name}: {learning.morphology} Never use an inflected form as it \
+appeared in the sentence.
 
 Each `new_cards` entry has:
   - `headword`: the word or expression the learner must recall (the answer).
-  - `definition`: one concise English definition (~5-20 words) of the sense \
-actually used, matching its part of speech. Monolingual English only. Do NOT \
-restate the headword, any inflected form of it, or an obvious cognate — the \
-learner must guess it from the definition. No examples, etymology, or labels.
+  - `definition`: one concise {learning.name} definition (~5-20 words) of the \
+sense actually used, matching its part of speech. Monolingual {learning.name} \
+only. Do NOT restate the headword, any inflected form of it, or an obvious \
+cognate — the learner must guess it from the definition. No examples, \
+etymology, or labels.
 {translation_bullet}  - `span`: a list of the exact substrings, copied VERBATIM from the PRIMARY \
 context's sentence (the FIRST context mapping to this card), to blank out on the \
 card front. Each must occur character-for-character in that sentence — when a \
@@ -932,12 +1044,14 @@ def cluster_groups(
     model: str,
     groups: list[dict],
     effort: str | None = None,
+    learning: LanguageProfile = DEFAULT_LEARNING,
     language: str | None = None,
 ):
     """Send stem-groups to Claude; return {stem: {stem, new_cards, assignments}}.
 
     `effort` is omitted unless given — cheap models reject the parameter.
-    `language`, when set, asks for a translation field in that language.
+    `learning` is the language being studied (sets the headword/definition
+    rules). `language`, when set, asks for a translation field in that language.
     """
     schema = cluster_schema(with_translation=bool(language))
     output_config = {"format": {"type": "json_schema", "schema": schema}}
@@ -949,7 +1063,7 @@ def cluster_groups(
         system=[
             {
                 "type": "text",
-                "text": cluster_system_prompt(language),
+                "text": cluster_system_prompt(learning, language),
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -981,13 +1095,13 @@ def report(candidates: list[Lookup], label: str) -> None:
         print(f"  {count:>4}  {title}")
 
 
-def preview(candidates: list[Lookup], n: int = 3) -> None:
+def preview(candidates: list[Lookup], n: int = 3, script: str = "spaced") -> None:
     if not candidates:
         return
     print("\nSample cards (definitions are generated on --apply):")
     for lk in candidates[:n]:
         print(f"\n  Front: <definition of {lk.stem!r}>")
-        print(f"         {blank_out(lk.sentence, '', lk.word, lk.stem)}")
+        print(f"         {blank_out(lk.sentence, '', lk.word, lk.stem, script)}")
         print(f"  Back:  {lk.stem}   [{lk.source}]")
 
 
@@ -1025,10 +1139,18 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Claude model id")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument(
+        "--learning",
+        metavar="CODE",
+        help="language you're studying, e.g. 'fr' (default: en; falls back to "
+        "LEARNING_LANGUAGE in .env). Sets which lookups are read and how cards "
+        f"are built. Known: {', '.join(sorted(LANGUAGES))}",
+    )
+    parser.add_argument(
         "--language",
         metavar="NAME",
-        help="add a back-of-card translation in this language, e.g. 'French' "
-        "(default: no translation; falls back to TRANSLATION_LANGUAGE in .env)",
+        help="add a back-of-card translation into your native language, e.g. "
+        "'Polish' (default: no translation; falls back to TRANSLATION_LANGUAGE "
+        "in .env). Orthogonal to --learning.",
     )
     parser.add_argument(
         "--export",
@@ -1040,11 +1162,14 @@ def main(argv: list[str]) -> int:
     export_path = Path(args.export).expanduser() if args.export else None
     offline = export_path is not None
 
+    load_env()  # so --learning/--language honour .env in dry runs too (setdefault)
+    learning = resolve_learning(args.learning)
+
     db_path = resolve_db(args.db)
-    lookups = read_lookups(db_path)
+    lookups = read_lookups(db_path, learning.code)
     if not lookups:
-        raise Fatal(f"No English lookups found in {db_path}.")
-    print(f"{len(lookups)} lookup(s) in {db_path.name}")
+        raise Fatal(f"No {learning.name} lookups found in {db_path}.")
+    print(f"{len(lookups)} {learning.name} lookup(s) in {db_path.name}")
 
     selected = [lk for lk in lookups if matches_books(lk, args.book)]
     if args.book:
@@ -1092,7 +1217,7 @@ def main(argv: list[str]) -> int:
     report(new_lookups, "To import")
 
     if not args.apply:
-        preview(new_lookups)
+        preview(new_lookups, script=learning.script)
         print("\nDry run — nothing written. Re-run with --apply to commit.")
         return 0
 
@@ -1100,7 +1225,6 @@ def main(argv: list[str]) -> int:
         print("\nNothing to do.")
         return 0
 
-    load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise Fatal(
             "ANTHROPIC_API_KEY is not set and was not found in .env.\n"
@@ -1122,7 +1246,10 @@ def main(argv: list[str]) -> int:
 
     language = resolve_language(args.language)
     lang_note = f", translating to {language}" if language else ""
-    print(f"\nClustering {len(new_lookups)} lookup(s) with {args.model}{lang_note}…")
+    print(
+        f"\nClustering {len(new_lookups)} {learning.name} lookup(s) "
+        f"with {args.model}{lang_note}…"
+    )
     added, updated, junked = apply_new_cards(
         client,
         args.model,
@@ -1131,6 +1258,7 @@ def main(argv: list[str]) -> int:
         skipped,
         args.batch_size,
         language,
+        learning=learning,
         sink=sink,
     )
     save_skipped(skipped)

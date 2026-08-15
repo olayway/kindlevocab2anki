@@ -9,8 +9,11 @@ LLM nondeterminism while still catching a prompt/schema regression.
 
 import pytest
 
-from kindle_anki import cluster_groups
+from kindle_anki import LANGUAGES, cluster_groups
 from tests.conftest import CHEAP_MODEL
+
+FR = LANGUAGES["fr"]
+JA = LANGUAGES["ja"]
 
 pytestmark = pytest.mark.llm
 
@@ -417,7 +420,104 @@ def test_phrasal_verb_promoted_to_expression_headword(claude):
     g = out["make"]
     a = g["assignments"][0]
     assert a["verdict"] == "new"
-    headword = g["new_cards"][a["card_index"]]["headword"].lower()
-    # Promoted beyond the bare stem to the phrasal expression.
-    assert headword != "make"
-    assert "off" in headword
+    headword = g["new_cards"][a["card_index"]]["headword"].lower().strip()
+    # Promoted to the phrasal expression. "make off" and "make off with" are
+    # both legitimate readings of the idiom, so accept either — but nothing else.
+    assert headword in {"make off", "make off with"}
+
+
+# --- French (the learning axis) ------------------------------------------
+# Same loose-property style, but with learning=FR: the base-form and
+# expression rules must fire on French morphology, and definitions come back
+# in French rather than English.
+
+
+def test_fr_inflected_verb_headword_is_infinitive(claude):
+    # Imperfect tense in the sentence; the headword must be the infinitive.
+    groups = [
+        {
+            "stem": "manger",
+            "contexts": [one_context("L1", "Il mangeait une pomme au soleil.")],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=FR)
+
+    g = out["manger"]
+    a = g["assignments"][0]
+    assert a["verdict"] == "new"
+    card = g["new_cards"][a["card_index"]]
+    assert card["headword"].lower() == "manger"
+    assert card["definition"].strip(), "definition must be present (in French)"
+
+
+def test_fr_expression_promoted_to_locution(claude):
+    # "faire" used inside the locution "faire la queue" (to queue up) must be
+    # promoted to the whole expression, not left as the bare verb.
+    groups = [
+        {
+            "stem": "faire",
+            "contexts": [
+                one_context(
+                    "L1", "Nous avons fait la queue pendant une heure au guichet."
+                )
+            ],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=FR)
+
+    g = out["faire"]
+    a = g["assignments"][0]
+    assert a["verdict"] == "new"
+    headword = g["new_cards"][a["card_index"]]["headword"].lower().strip()
+    # Unambiguous locution — assert the exact expression (tolerant of case only).
+    assert headword == "faire la queue"
+
+
+# --- Japanese (the "cjk" script class) -----------------------------------
+# blank_out's cjk path matches the span verbatim with NO word/stem fallback,
+# so for CJK the "span is an exact substring of the sentence" invariant is
+# load-bearing in a way it isn't for spaced languages. These guard that.
+
+
+def test_ja_span_is_verbatim_substring(claude):
+    # The whole point: whatever span the model picks MUST occur verbatim in the
+    # sentence, or the cjk blanking silently no-ops (there is no fallback).
+    sentence = "彼は昨日図書館で本を読んだ。"
+    groups = [
+        {
+            "stem": "読む",
+            "contexts": [one_context("L1", sentence)],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=JA)
+
+    g = out["読む"]
+    a = g["assignments"][0]
+    assert a["verdict"] == "new"
+    span = g["new_cards"][a["card_index"]]["span"]
+    assert span, "a span must be returned"
+    for piece in span:
+        assert piece in sentence, f"span piece {piece!r} is not verbatim in the sentence"
+
+
+def test_ja_headword_is_dictionary_form(claude):
+    # Sentence uses the past tense (読んだ); the headword must be the dictionary
+    # form (辞書形) 読む — the CJK analogue of the infinitive test.
+    groups = [
+        {
+            "stem": "読む",
+            "contexts": [one_context("L1", "彼は昨日図書館で本を読んだ。")],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=JA)
+
+    g = out["読む"]
+    a = g["assignments"][0]
+    assert a["verdict"] == "new"
+    card = g["new_cards"][a["card_index"]]
+    assert card["headword"].strip() == "読む"
+    assert card["definition"].strip(), "definition must be present (in Japanese)"

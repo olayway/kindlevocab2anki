@@ -98,7 +98,7 @@ def test_state_feeds_the_same_read_side_logic():
 
 
 def _canned_cluster(canned):
-    def fake(client, model, payloads, language=None):
+    def fake(client, model, payloads, learning=None, language=None):
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
 
     return fake

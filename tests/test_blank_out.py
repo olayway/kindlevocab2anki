@@ -44,3 +44,29 @@ def test_single_element_span_list():
     sentence = "They planned to make off with the jewels."
     result = blank_out(sentence, span=["make off"], word="make", stem="make")
     assert result == f"They planned to {BLANK} with the jewels."
+
+
+# The "cjk" script class (Japanese, Chinese, Thai) has no word boundaries or
+# case, so blanking matches the span verbatim and skips the inflection fallback.
+
+
+def test_cjk_blanks_span_verbatim():
+    sentence = "彼は昨日図書館で本を読んだ。"
+    result = blank_out(sentence, span="読んだ", word="読む", stem="読む", script="cjk")
+    assert result == f"彼は昨日図書館で本を{BLANK}。"
+
+
+def test_cjk_all_or_nothing_when_a_piece_is_missing():
+    sentence = "彼は本を読んだ。"
+    result = blank_out(
+        sentence, span=["読んだ", "ない"], word="読む", stem="読む", script="cjk"
+    )
+    assert result == sentence  # "ない" absent → leave intact, don't half-blank
+
+
+def test_cjk_does_not_use_inflection_fallback():
+    # No verbatim span and no match → intact. The spaced path's \\w* fallback
+    # (which would be meaningless without word boundaries) must not fire here.
+    sentence = "彼は本を読んだ。"
+    result = blank_out(sentence, span=[], word="読む", stem="読む", script="cjk")
+    assert result == sentence
