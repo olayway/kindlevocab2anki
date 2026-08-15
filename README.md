@@ -34,7 +34,13 @@ sentence. This tool does not collapse those to one card per lemma. Instead
 Claude clusters them:
 
 - **Polysemy → sense split.** `bank` met at a river and `bank` met downtown
-  become **two** cards, each with its own definition, sentence, and Polish.
+  become **two** cards, each with its own definition, sentence, and Polish. This
+  holds against cards **already in the deck** too: if you've carded `sordid` as
+  "morally wrong" and later look it up meaning "squalid", that's a new card, not
+  a match to the old one.
+- **Base-form headwords.** The word to recall is stored in its dictionary form —
+  verbs as the bare infinitive ("outdid" → **outdo**), nouns singular — never
+  the inflected shape it happened to wear in the sentence.
 - **Expression promotion.** A tap on `make` inside "they *made off* with it"
   becomes a card whose headword is **make off** — the expression Kindle can't
   look up directly.
@@ -154,10 +160,13 @@ browser.
 
 ### Blanking
 
-Claude returns the exact surface span to hide, so a `make off` card blanks the
-whole expression, not just `make`. The span is matched verbatim; if it doesn't
-occur, the tool falls back to the inflected form and then the lemma, and if
-none match it leaves the sentence intact rather than mangle it.
+Claude returns the exact surface span(s) to hide — a **list** of substrings, so
+a `make off` card blanks the whole expression, not just `make`. A separable
+phrasal verb split by its object ("she *tied* her hair *up*") gives each piece
+separately, `["tied", "up"]`, so the object between them stays visible. Every
+piece is matched verbatim; if any doesn't occur the tool falls back to the
+inflected form and then the lemma, and if none match it leaves the sentence
+intact rather than mangle it.
 
 ## State and re-runs
 
@@ -200,10 +209,12 @@ uv run --with pytest pytest
 uv run --with pytest --with anthropic pytest -m llm
 ```
 
-The evals use `claude-haiku-4-5` and assert loose properties (a proper noun is
-`junk`, two senses split into two cards, the returned span is a verbatim
-substring, a phrasal verb is promoted) so they survive model nondeterminism
-while still catching a prompt or schema regression.
+The evals use `claude-haiku-4-5` and assert loose properties so they survive
+model nondeterminism while still catching a prompt or schema regression: a
+proper noun is `junk`, two senses split into two cards with verbatim spans, a
+different sense of a word already in the deck becomes a new card, an inflected
+verb's headword comes back as the infinitive, and a phrasal verb is promoted to
+its expression headword.
 
 ## Troubleshooting
 
