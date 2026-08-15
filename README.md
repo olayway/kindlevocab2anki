@@ -84,6 +84,16 @@ uv run kindle_anki.py --learning fr --language Polish --layout translation --app
 
 Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on. The layout is applied **only when the `Kindle Vocab` note type is first created**; once it exists, the tool never rewrites its templates, so any tweaks you make in Anki's own card editor are left alone. To re-layout a deck that already exists, either change it in Anki (Browse → Cards…) or `--reset` and reimport. This applies to both paths: for an `.apkg`, Anki keeps the layout it already has for a note type on re-import.
 
+### Previewing the templates in a browser
+
+To iterate on how the cards look without building a deck, render them to an HTML page:
+
+```sh
+python3 preview_cards.py   # writes card_preview.html and opens it
+```
+
+`preview_cards.py` reads the **real** `CARD_CSS` and templates straight from `kindle_anki.py` and fills them with sample words using the same field substitution Anki does — so what you see is what Anki renders. It shows the front and back of both layouts across a few sample cards (including ones with no example sentence or no translation, to check that those sections collapse), plus a dark-mode toggle. Edit `CARD_CSS` or the templates in `kindle_anki.py`, re-run, and refresh the tab.
+
 ## Requirements
 
 |                       |                                                                                                                                                                                                                                           |
@@ -262,6 +272,7 @@ Delete the card in Anki. Its lookup ids leave the consumed set and get reprocess
 |                   |                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------- |
 | `kindle_anki.py`  | the whole tool — one file, PEP 723 inline dependencies                                      |
+| `preview_cards.py`| render the card templates to `card_preview.html` for previewing in a browser                |
 | `tests/`          | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
 | `.env`            | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
 | `vocab.db`        | cached copy of the Kindle database (git-ignored)                                            |

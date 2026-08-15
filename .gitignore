@@ -3,5 +3,6 @@
 *.apkg
 skipped.json
 deck_state.json
+card_preview.html
 __pycache__/
 .pytest_cache/
