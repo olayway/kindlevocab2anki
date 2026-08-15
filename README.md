@@ -1,16 +1,10 @@
-# Kindle Vocabulary → Anki
+# Kindle Vocabulary to Anki
 
 Turns the words you look up while reading on a Kindle into Anki flashcards —
 one card per **sense**, not per word. Claude reads the sentence each lookup
-appeared in, splits a word's distinct meanings into separate cards, promotes a
-lookup to the phrasal verb or expression it really belongs to, and merges
-repeat lookups of the same sense.
-
-> [!IMPORTANT]
-> This only works if your Kindle's **Vocabulary Builder** is switched on
-> (Settings → Language & Dictionaries → **Vocabulary Builder → On**). It records
-> only the words you look up *while it's on*, so turn it on before you read —
-> there's no way to recover lookups from before.
+appeared in, splits a word's distinct meanings into separate cards, builds cards
+for the phrasal verb or idiom a word belongs to, and merges repeat lookups of
+the same sense.
 
 You see a definition and the sentence with the answer blanked out; you recall
 the word. The back confirms it — and, if you turn on translations, adds a
@@ -39,7 +33,7 @@ stay fully monolingual.
 
 ## Sense-aware, not word-aware
 
-Kindle records one *lookup* per tap — the lemma, the surface form, and the
+Kindle records one _lookup_ per tap — the lemma, the surface form, and the
 sentence. This tool does not collapse those to one card per lemma. Instead
 Claude clusters them:
 
@@ -52,7 +46,7 @@ Claude clusters them:
 - **Base-form headwords.** The word to recall is stored in its dictionary form —
   verbs as the bare infinitive ("outdid" → **outdo**), nouns singular — never
   the inflected shape it happened to wear in the sentence.
-- **Expression promotion.** A tap on `make` inside "they *made off* with it"
+- **Expression promotion.** A tap on `make` inside "they _made off_ with it"
   becomes a card whose headword is **make off** — the expression Kindle can't
   look up directly.
 - **Same sense → one card.** Three lookups of the same meaning share a single
@@ -63,12 +57,12 @@ Claude clusters them:
 
 ## Requirements
 
-| | |
-|---|---|
-| **uv** | `brew install uv` — runs the script and its dependencies; nothing to install manually |
-| **Anki** | running, with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on, listening on `127.0.0.1:8765` — *or* skip both and use `--export deck.apkg` to write a package you import by hand ([Offline export](#offline-export)) |
-| **Anthropic API key** | in `.env` as `ANTHROPIC_API_KEY=...` (mode `600`, git-ignored) |
-| **Kindle** | with **Vocabulary Builder** switched on, connected by USB and mounted at `/Volumes/Kindle` at least once |
+|                       |                                                                                                                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **uv**                | `brew install uv` — runs the script and its dependencies; nothing to install manually                                                                                                                                                     |
+| **Anki**              | running, with the [AnkiConnect](https://ankiweb.net/shared/info/2055492159) add-on, listening on `127.0.0.1:8765` — _or_ skip both and use `--export deck.apkg` to write a package you import by hand ([Offline export](#offline-export)) |
+| **Anthropic API key** | in `.env` as `ANTHROPIC_API_KEY=...` (mode `600`, git-ignored)                                                                                                                                                                            |
+| **Kindle**            | with **Vocabulary Builder** switched on, connected by USB and mounted at `/Volumes/Kindle` at least once                                                                                                                                  |
 
 ## First-time setup
 
@@ -109,18 +103,18 @@ out what's already handled, so Anki must be running even for a dry run.)
 
 ## Options
 
-| Flag | Effect |
-|---|---|
-| *(none)* | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes. |
-| `--apply` | Cluster with Claude and add notes to Anki. |
-| `--reset` | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do. |
-| `--limit N` | Process at most N new lookups this run. Use it to sample cost and quality. |
-| `--book SUB` | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any. |
-| `--db PATH` | Read a specific `vocab.db` instead of auto-detecting. |
-| `--model ID` | Claude model (default `claude-opus-5`). |
-| `--batch-size N` | Stem-groups per API request (default 40). |
-| `--language NAME` | Add a back-of-card translation in this language, e.g. `French`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. |
-| `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export). |
+| Flag                 | Effect                                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _(none)_             | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes.                                                                                                |
+| `--apply`            | Cluster with Claude and add notes to Anki.                                                                                                                                 |
+| `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do. |
+| `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                 |
+| `--book SUB`         | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any.                                                                            |
+| `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                      |
+| `--model ID`         | Claude model (default `claude-opus-5`).                                                                                                                                    |
+| `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                  |
+| `--language NAME`    | Add a back-of-card translation in this language, e.g. `French`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`.                               |
+| `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                      |
 
 ```sh
 uv run kindle_anki.py --book "1984" --book "Zebras" --apply
@@ -159,7 +153,7 @@ are unchanged; Anki and AnkiConnect are simply not needed until import time.
 
 > [!NOTE]
 > Offline mode can't self-heal on manual edits the way the live path does: if
-> you delete a card *in Anki*, `deck_state.json` doesn't know, so that lookup
+> you delete a card _in Anki_, `deck_state.json` doesn't know, so that lookup
 > won't come back on the next run. Edit `deck_state.json` (or `--reset`) if you
 > need to force a rebuild.
 
@@ -194,7 +188,7 @@ collapsed — all the contexts survive so Claude can see the different senses.
 **4. Work out what's new — before spending any money.** The deck is queried by
 `Stem`, chunked ~100 stems per call. From that one pull the tool builds the set
 of **consumed** lookup ids (the union of every card's hidden `Lookups` field)
-and the **existing** cards per stem (for dedup context). A lookup is *new* only
+and the **existing** cards per stem (for dedup context). A lookup is _new_ only
 if its id is neither consumed nor in `skipped.json`.
 
 **5. Cluster.** New lookups are grouped by stem and sent to Claude in batches.
@@ -218,9 +212,9 @@ On the first `--apply` the script creates, if missing:
 - **Note type** `Kindle Vocab` with fields
   `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`,
   `LookupDate`, `Lookups`, and a single **Production** card template (definition
-  + blanked sentence on the front; word, translation, and source on the back).
-  The `Translation` field stays empty unless you run with `--language`, and the
-  template hides it when empty.
+  - blanked sentence on the front; word, translation, and source on the back).
+    The `Translation` field stays empty unless you run with `--language`, and the
+    template hides it when empty.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the
@@ -235,7 +229,7 @@ browser.
 
 Claude returns the exact surface span(s) to hide — a **list** of substrings, so
 a `make off` card blanks the whole expression, not just `make`. A separable
-phrasal verb split by its object ("she *tied* her hair *up*") gives each piece
+phrasal verb split by its object ("she _tied_ her hair _up_") gives each piece
 separately, `["tied", "up"]`, so the object between them stays visible. Every
 piece is matched verbatim; if any doesn't occur the tool falls back to the
 inflected form and then the lemma, and if none match it leaves the sentence
@@ -250,6 +244,14 @@ id is recorded on the card it produced (or the card that absorbed it), re-runs
 cost nothing for lookups you already have — and the pipeline **self-heals**:
 delete or edit a card in Anki and its lookup ids leave the consumed set, so
 they're reprocessed on the next run.
+
+That self-heal is also the catch for **a card you want gone** — say a word you
+already know that slipped in via a Kindle misclick. Deleting it won't stick: its
+lookup id leaves the consumed set and the card comes back next run. **Suspend the
+note instead.** Dedup is content-based and never reads a card's suspended state,
+so the suspended card keeps claiming its lookup id — it stays out of reviews and
+never regenerates. For a permanent, deck-independent skip, add its `Lookups` id
+to `skipped.json` (below) and then delete it.
 
 **`skipped.json`** (git-ignored) is the only local state on the live path, and
 holds junk only (offline `--export` adds one more, `deck_state.json`, described
@@ -311,14 +313,14 @@ reprocessed on the next `--apply`. To rebuild the whole deck, use `--reset`.
 
 ## Files
 
-| | |
-|---|---|
-| `kindle_anki.py` | the whole tool — one file, PEP 723 inline dependencies |
-| `tests/` | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals) |
-| `.env` | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
-| `vocab.db` | cached copy of the Kindle database (git-ignored) |
-| `skipped.json` | junk lookup ids → reason (git-ignored) |
-| `deck_state.json` | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored) |
+|                   |                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `kindle_anki.py`  | the whole tool — one file, PEP 723 inline dependencies                                      |
+| `tests/`          | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
+| `.env`            | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
+| `vocab.db`        | cached copy of the Kindle database (git-ignored)                                            |
+| `skipped.json`    | junk lookup ids → reason (git-ignored)                                                      |
+| `deck_state.json` | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored)          |
 
 ## A note on backups
 
