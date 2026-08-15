@@ -62,7 +62,59 @@ def test_polysemy_splits_into_two_cards_with_verbatim_spans(claude):
     sentences = " ".join(c["sentence"] for c in contexts)
     for card in g["new_cards"]:
         assert card["span"], "span must not be empty"
-        assert card["span"] in sentences
+        for piece in card["span"]:
+            assert piece in sentences
+
+
+def test_distinct_sense_from_existing_card_becomes_new(claude):
+    # Existing card covers the "morally wrong" sense; the new lookup is the
+    # unrelated "dirty/squalid" sense, so it must not collapse into `existing`.
+    groups = [
+        {
+            "stem": "sordid",
+            "contexts": [
+                one_context(
+                    "L1",
+                    "There are lots of really sordid apartments in the "
+                    "city's poorer areas.",
+                )
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "sordid",
+                    "definition": "morally wrong and shocking",
+                }
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["sordid"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "new"
+    assert len(g["new_cards"]) == 1
+
+
+def test_inflected_verb_headword_is_infinitive(claude):
+    # Sentence uses the past tense; the card's headword must be the base form.
+    groups = [
+        {
+            "stem": "outdo",
+            "contexts": [
+                one_context("L1", "She really outdid herself this time.")
+            ],
+            "existing": [],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["outdo"]
+    a = g["assignments"][0]
+    assert a["verdict"] == "new"
+    headword = g["new_cards"][a["card_index"]]["headword"].lower()
+    assert headword == "outdo"
 
 
 def test_phrasal_verb_promoted_to_expression_headword(claude):

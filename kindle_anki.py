@@ -563,21 +563,28 @@ For each group, decide the fate of every context and return any new cards.
 Per context, choose a `verdict`:
   - "new": this sense needs a new card. Set `card_index` to the index of the \
 entry in THIS group's `new_cards` that it maps to.
-  - "existing": this lookup means the same as one of the `existing` cards. Set \
-`card_index` to that existing entry's `index`; create no new card for it.
+  - "existing": this lookup is the SAME SENSE as one of the `existing` cards — \
+not merely the same word. Compare against each existing card's `definition`, not \
+its `headword`: a different meaning of the same word is "new", never "existing". \
+Set `card_index` to that existing entry's `index`; create no new card for it.
   - "junk": not a word worth learning — a proper noun, a person/place name, a \
 foreign word, a typo, or an OCR artefact. Set `card_index` to -1 and give a \
 short `reason`.
 
 Clustering rules:
   - Distinct meanings of the same stem are DIFFERENT cards (polysemy → sense \
-split): "bank" (river) and "bank" (money) are two cards.
+split): "bank" (river) and "bank" (money) are two cards. This applies to \
+`existing` cards too: if a lookup uses a different sense than every existing \
+card for that stem, it is "new" — e.g. existing "sordid" = "morally wrong" and a \
+lookup meaning "dirty/squalid" is a new card, not "existing".
   - Multiple lookups of the SAME sense share ONE card — give them the same \
 `card_index` and emit a single `new_cards` entry.
   - If a lookup's sense is really part of a multi-word expression or phrasal \
 verb (e.g. the stem "make" used as "make off with"), set that card's \
 `headword` to the whole expression, not the bare stem. Otherwise `headword` is \
-the ordinary dictionary form of the word.
+the ordinary dictionary form of the word: verbs as the bare infinitive/base form \
+(e.g. "outdid" → "outdo", "ran off" → "run off"), nouns singular, never an \
+inflected form as it appeared in the sentence.
 
 Each `new_cards` entry has:
   - `headword`: the word or expression the learner must recall (the answer).
