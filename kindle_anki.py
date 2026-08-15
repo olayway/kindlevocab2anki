@@ -590,10 +590,22 @@ For each group, decide the fate of every context and return any new cards.
 Per context, choose a `verdict`:
   - "new": this sense needs a new card. Set `card_index` to the index of the \
 entry in THIS group's `new_cards` that it maps to.
-  - "existing": this lookup is the SAME SENSE as one of the `existing` cards — \
-not merely the same word. Compare against each existing card's `definition`, not \
-its `headword`: a different meaning of the same word is "new", never "existing". \
-Set `card_index` to that existing entry's `index`; create no new card for it.
+  - "existing": this lookup maps to one of the `existing` cards — meaning it \
+uses the SAME HEADWORD in the SAME SENSE. Both must hold. The card teaches the learner to \
+recall one specific word or expression, so an "existing" match means the lookup \
+would be answered by that SAME headword. Two things break a match, each on its \
+own:
+    - Different meaning, same word → "new" (compare each existing card's \
+`definition`, not just its `headword`): existing "sordid" = "morally wrong" and \
+a lookup meaning "dirty/squalid" is "new".
+    - Different headword, even if the meaning is the same or nearly so → "new". \
+A synonym is a different headword: a "couch" lookup is "new" against an existing \
+"sofa" card. A bare stem is a different headword from a multi-word expression \
+that merely shares that stem: a plain "follow" lookup is "new" against a "follow \
+about" card.
+Match only when the lookup itself uses that same word or expression in that same \
+sense. Set `card_index` to that existing entry's `index`; create no new card for \
+it.
   - "junk": not a word worth learning — a proper noun, a person/place name, a \
 foreign word, a typo, or an OCR artefact. Set `card_index` to -1 and give a \
 short `reason`.

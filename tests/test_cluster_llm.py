@@ -129,6 +129,133 @@ def test_distinct_sense_from_existing_card_becomes_new(claude):
     assert len(g["new_cards"]) == 1
 
 
+def test_distinct_sense_from_existing_phrasal_becomes_new(claude):
+    # Existing card is the phrasal expression "follow about" (stem "follow").
+    # A bare "follow" meaning "understand" is a different sense, so it must be
+    # a new card, not collapsed into the phrasal card that shares the stem.
+    groups = [
+        {
+            "stem": "follow",
+            "contexts": [
+                one_context("L1", "Sorry, I don't follow your argument at all.")
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "follow about",
+                    "definition": "to keep moving around a place close behind "
+                    "someone, trailing them persistently",
+                }
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["follow"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "new"
+    assert len(g["new_cards"]) == 1
+
+
+def test_synonym_with_different_headword_becomes_new(claude):
+    # Two different single words that mean almost the same thing ("couch" vs the
+    # existing "sofa") are still different headwords, so the new lookup must be
+    # its own card — an "existing" match needs the SAME word, not just the same
+    # meaning. (The pipeline also never offers this cross-stem, but the model
+    # must not merge on sense alone even when it is offered.)
+    groups = [
+        {
+            "stem": "couch",
+            "contexts": [
+                one_context(
+                    "L1", "She stretched out on the couch and fell asleep."
+                )
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "sofa",
+                    "definition": "a long upholstered seat for two or more people",
+                }
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["couch"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "new"
+    assert len(g["new_cards"]) == 1
+    assert g["new_cards"][a["card_index"]]["headword"].lower() == "couch"
+
+
+def test_bare_stem_not_merged_into_existing_phrasal(claude):
+    # A plain "follow" (go after) shares the stem with the existing "follow
+    # about" card and the senses are adjacent, but the headword differs — a bare
+    # stem is not the same card as a multi-word expression. It must be "new".
+    groups = [
+        {
+            "stem": "follow",
+            "contexts": [
+                one_context(
+                    "L1", "The dog began to follow the postman down the lane."
+                )
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "follow about",
+                    "definition": "to keep moving around a place close behind "
+                    "someone, trailing them persistently",
+                }
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["follow"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "new"
+    assert len(g["new_cards"]) == 1
+    # Bare stem, not promoted to the phrasal expression.
+    assert g["new_cards"][a["card_index"]]["headword"].lower() == "follow"
+
+
+def test_same_sense_as_existing_phrasal_is_existing(claude):
+    # The lookup really is the "follow about" sense (trailing someone around),
+    # so it must map onto the existing phrasal card rather than mint a new one.
+    groups = [
+        {
+            "stem": "follow",
+            "contexts": [
+                one_context(
+                    "L1",
+                    "The toddler would follow her mother about the house all day.",
+                )
+            ],
+            "existing": [
+                {
+                    "index": 0,
+                    "headword": "follow about",
+                    "definition": "to keep moving around a place close behind "
+                    "someone, trailing them persistently",
+                }
+            ],
+        }
+    ]
+    out = cluster_groups(claude, CHEAP_MODEL, groups)
+
+    g = out["follow"]
+    a = g["assignments"][0]
+    assert a["lookup_id"] == "L1"
+    assert a["verdict"] == "existing"
+    assert a["card_index"] == 0
+    assert g["new_cards"] == []
+
+
 def test_inflected_verb_headword_is_infinitive(claude):
     # Sentence uses the past tense; the card's headword must be the base form.
     groups = [
