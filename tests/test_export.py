@@ -108,7 +108,7 @@ def test_apply_offline_persists_state_and_then_dedups(tmp_path, monkeypatch):
     monkeypatch.setattr(kindle_anki, "STATE_JSON", tmp_path / "deck_state.json")
     monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
     written = {}
-    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes: written.update(out=out, n=len(notes)))
+    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, layout=None: written.update(out=out, n=len(notes)))
     monkeypatch.setattr(
         kindle_anki,
         "cluster_groups",
@@ -153,7 +153,7 @@ def test_apply_offline_persists_state_and_then_dedups(tmp_path, monkeypatch):
 def test_apply_offline_links_lookup_to_existing_card(tmp_path, monkeypatch):
     monkeypatch.setattr(kindle_anki, "STATE_JSON", tmp_path / "deck_state.json")
     monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
-    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes: None)
+    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, layout=None: None)
     monkeypatch.setattr(
         kindle_anki,
         "cluster_groups",

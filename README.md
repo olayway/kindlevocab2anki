@@ -18,7 +18,7 @@ You see a definition and the sentence with the answer blanked out; you recall th
 └─────────────────────────────────────────────────────────┘
 ```
 
-Translations are **off by default** and configurable: pass `--language French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. It's deliberately on the **back only** — putting it on the front would turn recall into translation; here it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual.
+Translations are **off by default** and configurable: pass `--language French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. By default it sits on the **back only** — putting it on the front would turn recall into translation; there it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front and reveals the definition on the back — see [Card layout](#card-layout).
 
 ## Features
 
@@ -27,6 +27,7 @@ Each line pairs a behavior with the reasoning behind it; follow the link for the
 - **Sense-aware, not word-aware** — one card per _meaning_, not per lemma: polysemy is split into separate cards, phrasal verbs and idioms are promoted to their real headword, headwords are stored in dictionary form, repeat lookups of one sense merge, and junk is rejected. Kindle records raw taps; a good deck needs meanings, and only reading the sentence can tell them apart. → [Sense-aware, not word-aware](#sense-aware-not-word-aware)
 - **Cloze-style recall** — the front is a definition plus the original sentence with the answer blanked out; you recall the word, and the back confirms it. Recalling from a real context you met beats staring at an isolated word. → [Blanking](#blanking)
 - **Optional back-only translations** — off by default, enabled per-run with `--language`. On the front it would make you translate instead of recall; on the back it just confirms the sense. → intro, above.
+- **Switchable card layout** — the default `definition` layout prompts with the learning-language definition; `--layout translation` flips it so a beginner sees their native word on the front and the definition on the back. A definition in a language you can't read yet isn't a prompt — it's a second puzzle. Same fields, same notes; only what's revealed first changes. → [Card layout](#card-layout)
 - **Two ways to write cards** — live into a running Anki over AnkiConnect (default), or an offline `.apkg` package you import by hand (`--export`). AnkiConnect is the tightest loop; the package path needs nothing installed and works for mobile-only users. → [Offline export](#offline-export)
 - **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
 - **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
@@ -68,6 +69,20 @@ Built-in learning languages: `en`, `fr`, `de`, `es`, `ja`. Adding one is a singl
 
 - All cards still go to the **`English::Kindle`** deck regardless of learning language — rename or move it in Anki if you want per-language decks.
 - Book tags are ASCII-slugged, so a title in a non-Latin script collapses to `book::unknown`.
+
+## Card layout
+
+Every card holds the same fields; the **layout** only decides which one prompts you on the front and which is revealed on the back. Pick it with `--layout` (or `CARD_LAYOUT` in `.env`):
+
+- **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the word, plus the native translation if `--language` is set. You recall the word from a meaning stated in the language itself.
+- **`translation`** — front: your **native** translation + the blanked sentence; back: the word and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--language`** (it errors out otherwise).
+
+```sh
+# Beginner French deck: Polish on the front, definition revealed on the back
+uv run kindle_anki.py --learning fr --language Polish --layout translation --apply
+```
+
+Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on, so you can flip an existing deck's layout on a later run without rebuilding any cards. Against a running Anki the switch re-renders every existing card in place; for an `.apkg`, re-export and re-import (Anki keeps the layout it already has for a note type unless prompted to update).
 
 ## Requirements
 
@@ -118,6 +133,7 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                  |
 | `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages). |
 | `--language NAME`    | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`. |
+| `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--language`. Falls back to `CARD_LAYOUT` in `.env`. See [Card layout](#card-layout). |
 | `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                      |
 
 ```sh
@@ -181,7 +197,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 On the first `--apply` the script creates, if missing:
 
 - **Deck** `English::Kindle`
-- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template (definition - blanked sentence on the front; word, translation, and source on the back). The `Translation` field stays empty unless you run with `--language`, and the template hides it when empty.
+- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--language`, and the template hides it when empty.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the comma-joined list of the `LOOKUPS.id`s that produced or were absorbed by the card, and is the source of truth for what's already handled.

@@ -641,9 +641,51 @@ CARD_BACK = """\
 <div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
 
+# The "translation" layout flips the prompt direction for total beginners: the
+# native-language word is shown on the front (they can't yet read a definition
+# in the language they're learning), and the definition is revealed on the back
+# alongside the word. It reuses the exact same fields and CSS as the default —
+# only the placement of Definition/Translation swaps — so switching layouts
+# never touches note data, just how each card is rendered.
+CARD_FRONT_TRANSLATION = """\
+<div class="translation">{{Translation}}</div>
+{{#Sentence}}<div class="sentence">{{Sentence}}</div>{{/Sentence}}
+"""
 
-def ensure_model() -> None:
+CARD_BACK_TRANSLATION = """\
+{{FrontSide}}
+<hr id=answer>
+<div class="word">{{Word}}</div>
+{{#Definition}}<div class="definition">{{Definition}}</div>{{/Definition}}
+<div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
+"""
+
+LAYOUTS = {
+    "definition": (CARD_FRONT, CARD_BACK),
+    "translation": (CARD_FRONT_TRANSLATION, CARD_BACK_TRANSLATION),
+}
+DEFAULT_LAYOUT = "definition"
+
+
+def card_templates(layout: str) -> tuple[str, str]:
+    """(front, back) template HTML for a layout name (default if unknown)."""
+    return LAYOUTS.get(layout, LAYOUTS[DEFAULT_LAYOUT])
+
+
+def ensure_model(layout: str = DEFAULT_LAYOUT) -> None:
+    front, back = card_templates(layout)
     if MODEL_NAME in anki("modelNames"):
+        # The note type already exists, so createModel would no-op and leave the
+        # old templates in place. Push the requested layout instead — templates
+        # live on the note type and are shared by every card, so this re-renders
+        # the whole deck the moment the user switches --layout.
+        anki(
+            "updateModelTemplates",
+            model={
+                "name": MODEL_NAME,
+                "templates": {"Production": {"Front": front, "Back": back}},
+            },
+        )
         return
     anki(
         "createModel",
@@ -652,7 +694,7 @@ def ensure_model() -> None:
         css=CARD_CSS,
         isCloze=False,
         cardTemplates=[
-            {"Name": "Production", "Front": CARD_FRONT, "Back": CARD_BACK}
+            {"Name": "Production", "Front": front, "Back": back}
         ],
     )
     print(f"Created note type {MODEL_NAME!r}")
@@ -755,9 +797,10 @@ class ApkgSink(Sink):
     place rather than duplicate — so one file is always the whole deck.
     """
 
-    def __init__(self, out_path: Path, state: list[dict]):
+    def __init__(self, out_path: Path, state: list[dict], layout: str = DEFAULT_LAYOUT):
         self.out_path = out_path
         self.state = state
+        self.layout = layout
         self.by_id = {c["card_id"]: c for c in state}
 
     def add_notes(self, notes: list[dict]) -> None:
@@ -782,26 +825,27 @@ class ApkgSink(Sink):
 
     def finalize(self) -> None:
         save_state(self.state)
-        write_apkg(self.out_path, self.state)
+        write_apkg(self.out_path, self.state, self.layout)
 
 
-def build_genanki_model():
+def build_genanki_model(layout: str = DEFAULT_LAYOUT):
     """genanki model mirroring the AnkiConnect note type, so both paths
     produce visually identical cards from the same fields/template/CSS."""
     try:
         import genanki
     except ImportError as exc:  # pragma: no cover - uv installs this
         raise Fatal(f"The genanki package is unavailable: {exc}") from exc
+    front, back = card_templates(layout)
     return genanki.Model(
         GENANKI_MODEL_ID,
         MODEL_NAME,
         fields=[{"name": name} for name in FIELDS],
-        templates=[{"name": "Production", "qfmt": CARD_FRONT, "afmt": CARD_BACK}],
+        templates=[{"name": "Production", "qfmt": front, "afmt": back}],
         css=CARD_CSS,
     )
 
 
-def write_apkg(out_path: Path, notes: list[dict]) -> None:
+def write_apkg(out_path: Path, notes: list[dict], layout: str = DEFAULT_LAYOUT) -> None:
     """Write card records to an .apkg at `out_path`.
 
     Each record needs `fields` (keyed by FIELDS) and optional `tags`; the GUID
@@ -809,7 +853,7 @@ def write_apkg(out_path: Path, notes: list[dict]) -> None:
     """
     import genanki
 
-    model = build_genanki_model()
+    model = build_genanki_model(layout)
     deck = genanki.Deck(GENANKI_DECK_ID, DECK_NAME)
     for note in notes:
         fields = note["fields"]
@@ -868,6 +912,19 @@ def resolve_language(cli_value: str | None) -> str | None:
     value = (cli_value or os.environ.get("TRANSLATION_LANGUAGE") or "").strip()
     if not value or value.lower() == "none":
         return None
+    return value
+
+
+def resolve_layout(cli_value: str | None) -> str:
+    """Card layout: CLI flag, else CARD_LAYOUT in .env, else the default.
+
+    Raises Fatal on an unknown name so a typo fails fast rather than silently
+    falling back to the default layout.
+    """
+    value = (cli_value or os.environ.get("CARD_LAYOUT") or DEFAULT_LAYOUT).strip().lower()
+    if value not in LAYOUTS:
+        known = ", ".join(sorted(LAYOUTS))
+        raise Fatal(f"Unknown --layout {value!r}. Known layouts: {known}.")
     return value
 
 
@@ -1153,6 +1210,14 @@ def main(argv: list[str]) -> int:
         "in .env). Orthogonal to --learning.",
     )
     parser.add_argument(
+        "--layout",
+        choices=sorted(LAYOUTS),
+        help="card layout (default: definition; falls back to CARD_LAYOUT in "
+        ".env). 'definition' prompts with the learning-language definition; "
+        "'translation' prompts with your native translation on the front — for "
+        "beginners, and requires --language.",
+    )
+    parser.add_argument(
         "--export",
         metavar="FILE.apkg",
         help="offline mode: read/write state in deck_state.json and write cards "
@@ -1164,6 +1229,14 @@ def main(argv: list[str]) -> int:
 
     load_env()  # so --learning/--language honour .env in dry runs too (setdefault)
     learning = resolve_learning(args.learning)
+    language = resolve_language(args.language)
+    layout = resolve_layout(args.layout)
+    if layout == "translation" and not language:
+        raise Fatal(
+            "--layout translation puts the native translation on the front, so "
+            "it needs a translation: pass --language (e.g. --language Polish) or "
+            "set TRANSLATION_LANGUAGE in .env."
+        )
 
     db_path = resolve_db(args.db)
     lookups = read_lookups(db_path, learning.code)
@@ -1187,7 +1260,7 @@ def main(argv: list[str]) -> int:
             save_skipped({})
             print(f"--reset: cleared deck_state.json ({'was present' if existed else 'was empty'}) and skipped.json")
         else:
-            ensure_model()
+            ensure_model(layout)
             ensure_deck()
             ids = anki("findNotes", query=f'deck:"{DECK_NAME}"')
             if ids:
@@ -1237,14 +1310,13 @@ def main(argv: list[str]) -> int:
         raise Fatal(f"The anthropic package is unavailable: {exc}") from exc
 
     if offline:
-        sink: Sink = ApkgSink(export_path, state)
+        sink: Sink = ApkgSink(export_path, state, layout)
     else:
-        ensure_model()
+        ensure_model(layout)
         ensure_deck()
         sink = LiveSink()
     client = anthropic.Anthropic()
 
-    language = resolve_language(args.language)
     lang_note = f", translating to {language}" if language else ""
     print(
         f"\nClustering {len(new_lookups)} {learning.name} lookup(s) "
