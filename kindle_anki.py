@@ -673,20 +673,13 @@ def card_templates(layout: str) -> tuple[str, str]:
 
 
 def ensure_model(layout: str = DEFAULT_LAYOUT) -> None:
-    front, back = card_templates(layout)
+    # Only ever create the note type; never touch it once it exists. The
+    # templates belong to the user after that — this leaves hand-edits in Anki's
+    # card editor alone, and means switching --layout only affects a deck built
+    # from scratch (change it in Anki, or --reset, to re-layout an existing one).
     if MODEL_NAME in anki("modelNames"):
-        # The note type already exists, so createModel would no-op and leave the
-        # old templates in place. Push the requested layout instead — templates
-        # live on the note type and are shared by every card, so this re-renders
-        # the whole deck the moment the user switches --layout.
-        anki(
-            "updateModelTemplates",
-            model={
-                "name": MODEL_NAME,
-                "templates": {"Production": {"Front": front, "Back": back}},
-            },
-        )
         return
+    front, back = card_templates(layout)
     anki(
         "createModel",
         modelName=MODEL_NAME,

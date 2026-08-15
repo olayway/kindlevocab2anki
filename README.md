@@ -82,7 +82,7 @@ Every card holds the same fields; the **layout** only decides which one prompts 
 uv run kindle_anki.py --learning fr --language Polish --layout translation --apply
 ```
 
-Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on, so you can flip an existing deck's layout on a later run without rebuilding any cards. Against a running Anki the switch re-renders every existing card in place; for an `.apkg`, re-export and re-import (Anki keeps the layout it already has for a note type unless prompted to update).
+Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on. The layout is applied **only when the `Kindle Vocab` note type is first created**; once it exists, the tool never rewrites its templates, so any tweaks you make in Anki's own card editor are left alone. To re-layout a deck that already exists, either change it in Anki (Browse → Cards…) or `--reset` and reimport. This applies to both paths: for an `.apkg`, Anki keeps the layout it already has for a note type on re-import.
 
 ## Requirements
 
