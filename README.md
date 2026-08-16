@@ -32,7 +32,7 @@ Each line pairs a behavior with the reasoning behind it; follow the link for the
 - **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
 - **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
 - **Resilient writes** — read-only AnkiConnect calls retry through a dropped connection; mutating ones fail fast instead, because a blind retry could double-add a note. An interrupted run resumes cleanly from what's already saved. → [How it works](#how-it-works)
-- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database *and* the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. → [Languages](#languages)
+- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database _and_ the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. → [Languages](#languages)
 - **Auto database handling** — the Kindle's `vocab.db` is copied off the device to a local cache before anything reads it (SQLite on a removable FAT volume shouldn't be opened in place), so later runs work with the Kindle unplugged; `--db PATH` overrides detection. → [How it works](#how-it-works)
 - **One file, zero install** — the whole tool is a single script with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, so `uv run kindle_anki.py` fetches everything on first run and there's nothing to `pip install`. → [Files](#files)
 
@@ -131,20 +131,20 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 
 ## Options
 
-| Flag                 | Effect                                                                                                                                                                     |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _(none)_             | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes.                                                                                                |
-| `--apply`            | Cluster with Claude and add notes to Anki.                                                                                                                                 |
-| `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do. |
-| `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                 |
-| `--book SUB`         | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any.                                                                            |
-| `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                      |
-| `--model ID`         | Claude model (default `claude-opus-5`).                                                                                                                                    |
-| `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                  |
-| `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages). |
-| `--language NAME`    | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`. |
+| Flag                 | Effect                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _(none)_             | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes.                                                                                                                                                                                                                                                      |
+| `--apply`            | Cluster with Claude and add notes to Anki.                                                                                                                                                                                                                                                                                       |
+| `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do.                                                                                                                                                       |
+| `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                                                                                                                                                                       |
+| `--book SUB`         | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any.                                                                                                                                                                                                                                  |
+| `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                                                                                                                                                                            |
+| `--model ID`         | Claude model (default `claude-sonnet-5`).                                                                                                                                                                                                                                                                                        |
+| `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                                                                                                                                                                        |
+| `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages).                                                                                                                                                |
+| `--language NAME`    | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`.                                                                                                                                                |
 | `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--language`. Falls back to `CARD_LAYOUT` in `.env`. See [Card layout](#card-layout). |
-| `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                      |
+| `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                                                                                                                                                                            |
 
 ```sh
 uv run kindle_anki.py --book "1984" --book "Zebras" --apply
@@ -164,7 +164,7 @@ uv run kindle_anki.py --export deck.apkg --apply
 
 Everything that makes the live path sense-aware works identically here — the only thing that changes is where state lives. With no running deck to query, **`deck_state.json`** becomes the source of truth: it records every card and the lookup ids it consumed, so re-runs still skip what you already have, split senses, and promote expressions exactly as before. It's the offline stand-in for the `Lookups` field the live path reads off your cards.
 
-The `.apkg` is a **cumulative snapshot** of the whole deck, not a per-run diff.  Each card carries a stable GUID derived from its first lookup, so **re-importing a regenerated package updates cards in place — it never duplicates them.** Import the latest `deck.apkg` after each `--apply` and your deck stays in sync.
+The `.apkg` is a **cumulative snapshot** of the whole deck, not a per-run diff. Each card carries a stable GUID derived from its first lookup, so **re-importing a regenerated package updates cards in place — it never duplicates them.** Import the latest `deck.apkg` after each `--apply` and your deck stays in sync.
 
 The cards are byte-for-byte the same note type, template, and CSS as the live path, so switching between the two is seamless. Anthropic API key requirements are unchanged; Anki and AnkiConnect are simply not needed until import time.
 
@@ -196,7 +196,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 
 **4. Work out what's new — before spending any money.** The deck is queried by `Stem`, chunked ~100 stems per call. From that one pull the tool builds the set of **consumed** lookup ids (the union of every card's hidden `Lookups` field) and the **existing** cards per stem (for dedup context). A lookup is _new_ only if its id is neither consumed nor in `skipped.json`.
 
-**5. Cluster.** New lookups are grouped by stem and sent to Claude in batches.  For each group Claude returns new cards (headword, definition, the exact span to blank, and — when `--language` is set — a translation) plus a verdict for every lookup: **new** (maps to one of the new cards), **existing** (same sense as a card already in the deck), or **junk**. Structured outputs pin the response to a schema so it can't come back malformed. The system prompt is marked for prompt caching.
+**5. Cluster.** New lookups are grouped by stem and sent to Claude in batches. For each group Claude returns new cards (headword, definition, the exact span to blank, and — when `--language` is set — a translation) plus a verdict for every lookup: **new** (maps to one of the new cards), **existing** (same sense as a card already in the deck), or **junk**. Structured outputs pin the response to a schema so it can't come back malformed. The system prompt is marked for prompt caching.
 
 **6. Write to Anki.** One note per new card, with `allowDuplicate: true` — this pipeline owns dedup, so Anki's own duplicate guard is turned off. `existing` verdicts append the lookup id to the matched card's `Lookups`; `junk` verdicts go to `skipped.json`. With `--export`, the same outcomes are written to `deck_state.json` and an `.apkg` instead ([Offline export](#offline-export)).
 
@@ -212,7 +212,7 @@ On the first `--apply` the script creates, if missing:
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the comma-joined list of the `LOOKUPS.id`s that produced or were absorbed by the card, and is the source of truth for what's already handled.
 
-Each note is tagged `kindle` plus `book::<slug>`, e.g.  `book::why-zebras-don-t-get-ulcers`, so you get a per-book tag tree in the browser.
+Each note is tagged `kindle` plus `book::<slug>`, e.g. `book::why-zebras-don-t-get-ulcers`, so you get a per-book tag tree in the browser.
 
 ### Blanking
 
@@ -232,11 +232,11 @@ That self-heal is also the catch for **a card you want gone** — say a word you
 { "a1b2c3": "proper noun", "d4e5f6": "ocr artefact" }
 ```
 
-Keyed by `LOOKUPS.id` → reason, so junk isn't paid to be re-judged every run.  It's rewritten after every batch, so an interrupted run resumes cleanly.  `--reset` clears it (and the deck) for a full rebuild.
+Keyed by `LOOKUPS.id` → reason, so junk isn't paid to be re-judged every run. It's rewritten after every batch, so an interrupted run resumes cleanly. `--reset` clears it (and the deck) for a full rebuild.
 
 ## Cost
 
-Rough order of magnitude for ~400 lookups at `claude-opus-5` prices: **a couple of dollars**, in about ten requests. Run `--apply --limit 40` first and check the actual spend in the Anthropic console before doing the rest. Cheaper: `--model claude-sonnet-5`, or a smaller `--batch-size` if you see truncation.
+Rough order of magnitude for ~400 lookups at `claude-sonnet-5` prices: **a couple of dollars**, in about ten requests. Run `--apply --limit 40` first and check the actual spend in the Anthropic console before doing the rest. Cheaper: `--model claude-sonnet-5`, or a smaller `--batch-size` if you see truncation.
 
 ## Tests
 
@@ -269,15 +269,15 @@ Delete the card in Anki. Its lookup ids leave the consumed set and get reprocess
 
 ## Files
 
-|                   |                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------- |
-| `kindle_anki.py`  | the whole tool — one file, PEP 723 inline dependencies                                      |
-| `preview_cards.py`| render the card templates to `card_preview.html` for previewing in a browser                |
-| `tests/`          | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
-| `.env`            | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
-| `vocab.db`        | cached copy of the Kindle database (git-ignored)                                            |
-| `skipped.json`    | junk lookup ids → reason (git-ignored)                                                      |
-| `deck_state.json` | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored)          |
+|                    |                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `kindle_anki.py`   | the whole tool — one file, PEP 723 inline dependencies                                      |
+| `preview_cards.py` | render the card templates to `card_preview.html` for previewing in a browser                |
+| `tests/`           | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
+| `.env`             | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
+| `vocab.db`         | cached copy of the Kindle database (git-ignored)                                            |
+| `skipped.json`     | junk lookup ids → reason (git-ignored)                                                      |
+| `deck_state.json`  | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored)          |
 
 ## A note on backups
 
