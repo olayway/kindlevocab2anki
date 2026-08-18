@@ -50,7 +50,7 @@ Kindle records one _lookup_ per tap — the lemma, the surface form, and the sen
 
 Two independent axes control language:
 
-- **`--learning CODE`** — the language you're **studying**. It gates which Kindle lookups are read (via `WORDS.lang`), sets the language the definitions are written in, and picks the base-form rules (how a headword is normalized) and the blanking strategy. Default `en`.
+- **`--learning CODE`** — the language you're **studying**. It gates which Kindle lookups are read (via `WORDS.lang`), sets the language the definitions are written in, and picks the base-form rules (how a headword is normalized) and the blanking behavior. Default `en`. Each run writes to a per-language deck (`English::Kindle`, `French::Kindle`, …).
 - **`--language NAME`** — your **native** language, glossed on the **back** of the card only. Optional and off by default.
 
 They compose freely: `--learning fr --language Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back. Leave `--language` off and the cards stay monolingual in the learning language.
@@ -63,12 +63,21 @@ uv run kindle_anki.py --learning fr --apply
 uv run kindle_anki.py --learning fr --language Polish --apply
 ```
 
-Built-in learning languages: `en`, `fr`, `de`, `es`, `ja`. Adding one is a single `LanguageProfile` entry in `LANGUAGES` (a `code`, a display `name`, a `script` class, and a one-line `morphology` rule).
+### Adding or tuning a language
 
-**Known limitations.** Space-delimited, cased, suffix-inflecting languages (English, French, German, Spanish, …) use the `spaced` blanking strategy and are well-supported. Japanese/Chinese/Thai use a `cjk` strategy that blanks the exact span verbatim (no word-boundary or inflection fallback). Two rough edges remain and are worth knowing:
+Languages are **data, not code**: they live in [`languages.yaml`](languages.yaml) beside the script, keyed by their Kindle `WORDS.lang` code. `en`, `fr`, `de`, `es`, and `ja` ship in it. Adding one is a new entry — no source edits:
 
-- All cards still go to the **`English::Kindle`** deck regardless of learning language — rename or move it in Anki if you want per-language decks.
-- Book tags are ASCII-slugged, so a title in a non-Latin script collapses to `book::unknown`.
+```yaml
+nl:                       # the WORDS.lang code (also the SQL gate)
+  name: Dutch             # spliced into the prompt and the deck ("Dutch::Kindle")
+  boundaries: true        # blanking: match on word boundaries (\b…\b)
+  ignore_case: true       # blanking: match case-insensitively
+  inflection: true        # blanking: fall back to the inflected word/stem
+  morphology: >-          # prompt fragment: how to normalize a headword
+    verbs to the infinitive; nouns singular; promote expressions to the whole.
+```
+
+The three booleans replace what used to be a fixed `spaced`/`cjk` strategy, so you can describe any script's matching directly. Spaced, cased, suffix-inflecting languages (English, French, German, Spanish, …) set all three `true`. Scripts with no word breaks or case (Japanese, Chinese, Thai) set all three `false`, so blanking matches the exact span as a plain substring. The file is validated on load — a missing field, a non-boolean flag, or a malformed file stops the run with a message naming the culprit.
 
 ## Card layout
 
@@ -185,7 +194,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
                             stem-groups (batches of 40) ──▶ Claude
                                               │  new / existing / junk
                                               ▼
-                            AnkiConnect ──▶ English::Kindle
+                            AnkiConnect ──▶ <Language>::Kindle
 ```
 
 **1. Get the database.** `vocab.db` is copied off the Kindle into the project directory before anything reads it — SQLite on a removable FAT volume shouldn't be opened in place. The copy doubles as a cache, so you can re-run with the Kindle unplugged.
@@ -206,7 +215,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 
 On the first `--apply` the script creates, if missing:
 
-- **Deck** `English::Kindle`
+- **Deck** `<Language>::Kindle`, named for the learning language — `English::Kindle` by default, `French::Kindle` under `--learning fr`, and so on
 - **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--language`, and the template hides it when empty.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
@@ -272,6 +281,7 @@ Delete the card in Anki. Its lookup ids leave the consumed set and get reprocess
 |                    |                                                                                             |
 | ------------------ | ------------------------------------------------------------------------------------------- |
 | `kindle_anki.py`   | the whole tool — one file, PEP 723 inline dependencies                                      |
+| `languages.yaml`   | learning-language profiles (name, blanking flags, morphology) — edit to add or tune a language |
 | `preview_cards.py` | render the card templates to `card_preview.html` for previewing in a browser                |
 | `tests/`           | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
 | `.env`             | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |

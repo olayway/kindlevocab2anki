@@ -1,0 +1,66 @@
+# Learning-language profiles for kindle_anki.py.
+#
+# Each entry is keyed by its Kindle WORDS.lang code (the SQL gate that decides
+# which lookups a run reads). Adding or tuning a language is a config edit here;
+# no code changes. Fields (all required):
+#
+#   name         Human name spliced into the clustering prompt ("French") and
+#                the deck ("French::Kindle").
+#   morphology   Prompt fragment: how to normalise a headword to its base form
+#                (verbs → infinitive, etc.) and when to promote expressions.
+#   boundaries   Blanking: wrap matches in word boundaries (\b…\b). true for
+#                spaced scripts (Latin, Cyrillic, …); false where there are no
+#                word breaks (Japanese, Chinese, Thai), so matches are plain
+#                substrings.
+#   ignore_case  Blanking: match case-insensitively. false for caseless scripts.
+#   inflection   Blanking: after the exact span, fall back to the inflected
+#                word/stem ("afflict" → "afflicted"). false where a suffix
+#                expansion is meaningless.
+
+en:
+  name: English
+  boundaries: true
+  ignore_case: true
+  inflection: true
+  morphology: >-
+    verbs to the bare infinitive ("outdid" → "outdo", "ran off" → "run off"),
+    nouns singular; promote phrasal verbs to the whole expression
+    ("make off with").
+
+fr:
+  name: French
+  boundaries: true
+  ignore_case: true
+  inflection: true
+  morphology: >-
+    verbs to the infinitive ("mangeait" → "manger"), adjectives to the
+    masculine singular ("heureuse" → "heureux"), nouns singular without
+    article; promote locutions to the whole expression ("faire la queue").
+
+de:
+  name: German
+  boundaries: true
+  ignore_case: true
+  inflection: true
+  morphology: >-
+    verbs to the infinitive, reattaching separable prefixes
+    ("machte … auf" → "aufmachen"); nouns singular, capitalised.
+
+es:
+  name: Spanish
+  boundaries: true
+  ignore_case: true
+  inflection: true
+  morphology: >-
+    verbs to the infinitive ("comía" → "comer"), adjectives to the masculine
+    singular, nouns singular without article; promote locutions to the whole
+    expression.
+
+ja:
+  name: Japanese
+  boundaries: false
+  ignore_case: false
+  inflection: false
+  morphology: >-
+    verbs and adjectives to their dictionary form (辞書形). There is no word
+    spacing, so each span is an exact substring — do not split on whitespace.

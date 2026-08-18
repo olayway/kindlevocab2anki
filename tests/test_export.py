@@ -12,6 +12,7 @@ import zipfile
 import pytest
 
 import kindle_anki
+from tests.conftest import EN
 from kindle_anki import (
     ApkgSink,
     Lookup,
@@ -24,6 +25,8 @@ from kindle_anki import (
     save_state,
     state_to_notes_info,
 )
+
+DECK = "English::Kindle"
 
 
 def lk(id, stem, sentence, ts):
@@ -108,7 +111,7 @@ def test_apply_offline_persists_state_and_then_dedups(tmp_path, monkeypatch):
     monkeypatch.setattr(kindle_anki, "STATE_JSON", tmp_path / "deck_state.json")
     monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
     written = {}
-    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, layout=None: written.update(out=out, n=len(notes)))
+    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, deck_name=None, layout=None: written.update(out=out, n=len(notes)))
     monkeypatch.setattr(
         kindle_anki,
         "cluster_groups",
@@ -124,13 +127,15 @@ def test_apply_offline_persists_state_and_then_dedups(tmp_path, monkeypatch):
     )
 
     state: list[dict] = []
-    sink = ApkgSink(tmp_path / "deck.apkg", state)
+    sink = ApkgSink(tmp_path / "deck.apkg", state, DECK)
     added, updated, junked = apply_new_cards(
         client=None,
         model="m",
         new_lookups=[lk("L1", "bank", "We sat on the river bank.", 1)],
         existing_index={},
         skipped={},
+        learning=EN,
+        deck_name=DECK,
         sink=sink,
     )
     assert (added, updated, junked) == (1, 0, 0)
@@ -153,7 +158,7 @@ def test_apply_offline_persists_state_and_then_dedups(tmp_path, monkeypatch):
 def test_apply_offline_links_lookup_to_existing_card(tmp_path, monkeypatch):
     monkeypatch.setattr(kindle_anki, "STATE_JSON", tmp_path / "deck_state.json")
     monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
-    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, layout=None: None)
+    monkeypatch.setattr(kindle_anki, "write_apkg", lambda out, notes, deck_name=None, layout=None: None)
     monkeypatch.setattr(
         kindle_anki,
         "cluster_groups",
@@ -170,7 +175,7 @@ def test_apply_offline_links_lookup_to_existing_card(tmp_path, monkeypatch):
 
     state = [card("L0", "make", "L0", word="make", definition="create")]
     existing_index = build_existing_index(state_to_notes_info(state))
-    sink = ApkgSink(tmp_path / "deck.apkg", state)
+    sink = ApkgSink(tmp_path / "deck.apkg", state, DECK)
 
     added, updated, junked = apply_new_cards(
         client=None,
@@ -178,6 +183,8 @@ def test_apply_offline_links_lookup_to_existing_card(tmp_path, monkeypatch):
         new_lookups=[lk("L3", "make", "Please make the bed.", 3)],
         existing_index=existing_index,
         skipped={},
+        learning=EN,
+        deck_name=DECK,
         sink=sink,
     )
     assert (added, updated, junked) == (0, 1, 0)
@@ -201,6 +208,6 @@ def test_write_apkg_emits_a_zip_backed_package(tmp_path):
         }
     ]
     out = tmp_path / "deck.apkg"
-    kindle_anki.write_apkg(out, records)
+    kindle_anki.write_apkg(out, records, DECK)
     assert out.exists() and out.stat().st_size > 0
     assert zipfile.is_zipfile(out)  # .apkg is a zip of the sqlite collection

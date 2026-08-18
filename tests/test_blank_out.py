@@ -46,21 +46,22 @@ def test_single_element_span_list():
     assert result == f"They planned to {BLANK} with the jewels."
 
 
-# The "cjk" script class (Japanese, Chinese, Thai) has no word boundaries or
-# case, so blanking matches the span verbatim and skips the inflection fallback.
+# Caseless, boundary-less scripts (Japanese, Chinese, Thai) set boundaries and
+# ignore_case off and inflection off: blanking matches the span verbatim as a
+# plain substring and skips the inflection fallback.
+
+CJK = dict(boundaries=False, ignore_case=False, inflection=False)
 
 
 def test_cjk_blanks_span_verbatim():
     sentence = "彼は昨日図書館で本を読んだ。"
-    result = blank_out(sentence, span="読んだ", word="読む", stem="読む", script="cjk")
+    result = blank_out(sentence, span="読んだ", word="読む", stem="読む", **CJK)
     assert result == f"彼は昨日図書館で本を{BLANK}。"
 
 
 def test_cjk_all_or_nothing_when_a_piece_is_missing():
     sentence = "彼は本を読んだ。"
-    result = blank_out(
-        sentence, span=["読んだ", "ない"], word="読む", stem="読む", script="cjk"
-    )
+    result = blank_out(sentence, span=["読んだ", "ない"], word="読む", stem="読む", **CJK)
     assert result == sentence  # "ない" absent → leave intact, don't half-blank
 
 
@@ -68,5 +69,12 @@ def test_cjk_does_not_use_inflection_fallback():
     # No verbatim span and no match → intact. The spaced path's \\w* fallback
     # (which would be meaningless without word boundaries) must not fire here.
     sentence = "彼は本を読んだ。"
-    result = blank_out(sentence, span=[], word="読む", stem="読む", script="cjk")
+    result = blank_out(sentence, span=[], word="読む", stem="読む", **CJK)
     assert result == sentence
+
+
+def test_cjk_matches_substring_without_boundaries():
+    # boundaries off means a span with no surrounding word breaks still matches.
+    sentence = "食べる前に読んだ。"
+    result = blank_out(sentence, span="読ん", word="読む", stem="読む", **CJK)
+    assert result == f"食べる前に{BLANK}だ。"

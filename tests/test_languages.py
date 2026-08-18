@@ -3,7 +3,8 @@ axis (--language).
 
 The learning language gates which vocab.db lookups are read (WORDS.lang), and
 parametrizes the clustering prompt (definition language + base-form rules). It
-is independent of the back-of-card translation language.
+is independent of the back-of-card translation language. Profiles are loaded
+from languages.yaml (no in-code table) — see load_languages tests below.
 """
 
 import sqlite3
@@ -12,13 +13,13 @@ import pytest
 
 import kindle_anki
 from kindle_anki import (
-    DEFAULT_LEARNING,
     Fatal,
-    LANGUAGES,
     cluster_system_prompt,
+    load_languages,
     read_lookups,
     resolve_learning,
 )
+from tests.conftest import LANGS
 
 
 # --- resolve_learning -----------------------------------------------------
@@ -26,34 +27,123 @@ from kindle_anki import (
 
 def test_defaults_to_english(monkeypatch):
     monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
-    assert resolve_learning(None) is LANGUAGES["en"]
-    assert DEFAULT_LEARNING is LANGUAGES["en"]
+    assert resolve_learning(None, LANGS) is LANGS["en"]
 
 
 def test_cli_code_selects_profile(monkeypatch):
     monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
-    assert resolve_learning("fr") is LANGUAGES["fr"]
+    assert resolve_learning("fr", LANGS) is LANGS["fr"]
 
 
 def test_code_is_case_insensitive(monkeypatch):
     monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
-    assert resolve_learning("FR") is LANGUAGES["fr"]
+    assert resolve_learning("FR", LANGS) is LANGS["fr"]
 
 
 def test_env_fallback(monkeypatch):
     monkeypatch.setenv("LEARNING_LANGUAGE", "de")
-    assert resolve_learning(None) is LANGUAGES["de"]
+    assert resolve_learning(None, LANGS) is LANGS["de"]
 
 
 def test_cli_overrides_env(monkeypatch):
     monkeypatch.setenv("LEARNING_LANGUAGE", "de")
-    assert resolve_learning("ja") is LANGUAGES["ja"]
+    assert resolve_learning("ja", LANGS) is LANGS["ja"]
 
 
 def test_unknown_language_is_fatal(monkeypatch):
     monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
     with pytest.raises(Fatal, match="Unknown --learning 'xx'"):
-        resolve_learning("xx")
+        resolve_learning("xx", LANGS)
+
+
+def test_default_missing_from_config_is_fatal(monkeypatch):
+    # No silent fallback: if the default code isn't in the file, say so.
+    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
+    without_en = {k: v for k, v in LANGS.items() if k != "en"}
+    with pytest.raises(Fatal, match="Unknown --learning 'en'"):
+        resolve_learning(None, without_en)
+
+
+# --- load_languages: the file is the sole source, so it validates hard -----
+
+
+def _write(tmp_path, text):
+    path = tmp_path / "languages.yaml"
+    path.write_text(text)
+    return path
+
+
+VALID_EN = """
+en:
+  name: English
+  boundaries: true
+  ignore_case: true
+  inflection: true
+  morphology: verbs to the infinitive.
+"""
+
+
+def test_loads_the_shipped_file():
+    langs = load_languages()  # the real languages.yaml beside the script
+    assert set(langs) >= {"en", "fr", "de", "es", "ja"}
+    assert langs["en"].name == "English"
+    assert langs["ja"].boundaries is False and langs["ja"].inflection is False
+    assert langs["en"].code == "en"
+
+
+def test_missing_file_is_fatal(tmp_path):
+    with pytest.raises(Fatal, match="not found"):
+        load_languages(tmp_path / "nope.yaml")
+
+
+def test_malformed_yaml_is_fatal(tmp_path):
+    path = _write(tmp_path, "en: [unclosed\n")
+    with pytest.raises(Fatal, match="not valid YAML"):
+        load_languages(path)
+
+
+def test_non_mapping_is_fatal(tmp_path):
+    path = _write(tmp_path, "- just\n- a list\n")
+    with pytest.raises(Fatal, match="mapping of language code"):
+        load_languages(path)
+
+
+def test_empty_file_is_fatal(tmp_path):
+    path = _write(tmp_path, "\n")
+    with pytest.raises(Fatal, match="not found|defines no languages"):
+        load_languages(path)
+
+
+@pytest.mark.parametrize("field", ["name", "morphology", "boundaries", "ignore_case", "inflection"])
+def test_missing_required_field_is_fatal(tmp_path, field):
+    lines = [l for l in VALID_EN.strip().splitlines() if not l.strip().startswith(field + ":")]
+    path = _write(tmp_path, "\n".join(lines) + "\n")
+    with pytest.raises(Fatal, match=f"missing required field '{field}'"):
+        load_languages(path)
+
+
+def test_non_bool_flag_is_fatal(tmp_path):
+    path = _write(tmp_path, VALID_EN.replace("boundaries: true", "boundaries: yesish"))
+    with pytest.raises(Fatal, match="'boundaries' must be true/false"):
+        load_languages(path)
+
+
+def test_non_text_name_is_fatal(tmp_path):
+    path = _write(tmp_path, VALID_EN.replace("name: English", "name: true"))
+    with pytest.raises(Fatal, match="'name' must be text"):
+        load_languages(path)
+
+
+def test_entry_not_a_mapping_is_fatal(tmp_path):
+    path = _write(tmp_path, "en: just-a-string\n")
+    with pytest.raises(Fatal, match="must be a mapping of fields"):
+        load_languages(path)
+
+
+def test_code_is_lowercased_from_key(tmp_path):
+    path = _write(tmp_path, VALID_EN.replace("en:", "EN:"))
+    langs = load_languages(path)
+    assert "en" in langs and langs["en"].code == "en"
 
 
 # --- the read gate --------------------------------------------------------
@@ -104,16 +194,16 @@ def test_gate_defaults_to_english(tmp_path):
 
 
 def test_prompt_uses_learning_language_name():
-    prompt = cluster_system_prompt(LANGUAGES["fr"])
+    prompt = cluster_system_prompt(LANGS["fr"])
     assert "a French learner" in prompt
     assert "one concise French definition" in prompt
     assert "Monolingual French" in prompt
     # the profile's morphology fragment is spliced into the base-form rule
-    assert LANGUAGES["fr"].morphology in prompt
+    assert LANGS["fr"].morphology in prompt
 
 
-def test_prompt_defaults_to_english():
-    prompt = cluster_system_prompt()
+def test_prompt_for_english():
+    prompt = cluster_system_prompt(LANGS["en"])
     assert "an English learner" in prompt or "a English learner" in prompt
     assert "Monolingual English" in prompt
 
@@ -121,7 +211,7 @@ def test_prompt_defaults_to_english():
 def test_translation_axis_is_independent_of_learning():
     # Learning French, native tongue Polish: the back-of-card gloss is Polish
     # while definitions stay monolingual French.
-    prompt = cluster_system_prompt(LANGUAGES["fr"], language="Polish")
+    prompt = cluster_system_prompt(LANGS["fr"], language="Polish")
     assert "a Polish translation" in prompt
     assert "Monolingual French" in prompt
 

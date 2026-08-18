@@ -6,7 +6,10 @@ payload per new_card), `existing` (lookup->existing-card links to record), and
 `junk` (lookup->reason for skipped.json). Pure — no Anki call, no LLM.
 """
 
-from kindle_anki import DECK_NAME, MODEL_NAME, Lookup, build_notes
+from kindle_anki import MODEL_NAME, Lookup, build_notes
+from tests.conftest import EN
+
+DECK = "English::Kindle"
 
 
 def mklookup(id, stem="x", **kw):
@@ -41,11 +44,11 @@ def test_new_verdict_builds_one_note_with_all_fields():
         ],
     }
 
-    result = build_notes("afflict", lookups, response)
+    result = build_notes("afflict", lookups, response, DECK, EN)
 
     assert len(result.notes) == 1
     note = result.notes[0]
-    assert note["deckName"] == DECK_NAME
+    assert note["deckName"] == DECK
     assert note["modelName"] == MODEL_NAME
     # No translation by default — the Translation field is absent entirely.
     assert note["fields"] == {
@@ -78,7 +81,7 @@ def test_translate_true_adds_translation_field():
         ],
     }
 
-    result = build_notes("afflict", lookups, response, translate=True)
+    result = build_notes("afflict", lookups, response, DECK, EN, translate=True)
 
     assert result.notes[0]["fields"]["Translation"] == "trapić"
 
@@ -122,7 +125,7 @@ def test_shared_card_joins_ids_and_primary_is_earliest():
         ],
     }
 
-    result = build_notes("bank", lookups, response)
+    result = build_notes("bank", lookups, response, DECK, EN)
 
     assert len(result.notes) == 1
     fields = result.notes[0]["fields"]
@@ -146,7 +149,7 @@ def test_junk_verdict_records_reason_and_makes_no_note():
         ],
     }
 
-    result = build_notes("winston", lookups, response)
+    result = build_notes("winston", lookups, response, DECK, EN)
 
     assert result.notes == []
     assert result.junk == [{"lookup_id": "L1", "reason": "proper noun"}]
@@ -173,7 +176,7 @@ def test_out_of_range_card_index_is_skipped_not_crashed(capsys):
         ],
     }
 
-    result = build_notes("afflict", lookups, response)
+    result = build_notes("afflict", lookups, response, DECK, EN)
 
     # Only the valid card built; the bad one was dropped, not crashed.
     assert len(result.notes) == 1
@@ -197,7 +200,7 @@ def test_non_int_card_index_is_skipped_not_crashed(capsys):
         ],
     }
 
-    result = build_notes("afflict", lookups, response)
+    result = build_notes("afflict", lookups, response, DECK, EN)
 
     assert result.notes == []
     assert "bad card_index" in capsys.readouterr().out
@@ -218,7 +221,7 @@ def test_existing_verdict_records_link_and_makes_no_note():
         ],
     }
 
-    result = build_notes("make", lookups, response)
+    result = build_notes("make", lookups, response, DECK, EN)
 
     assert result.notes == []
     assert result.existing == [{"card_index": 2, "lookup_id": "L1"}]

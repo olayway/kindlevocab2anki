@@ -9,11 +9,8 @@ LLM nondeterminism while still catching a prompt/schema regression.
 
 import pytest
 
-from kindle_anki import LANGUAGES, cluster_groups
-from tests.conftest import CHEAP_MODEL
-
-FR = LANGUAGES["fr"]
-JA = LANGUAGES["ja"]
+from kindle_anki import cluster_groups
+from tests.conftest import CHEAP_MODEL, EN, FR, JA
 
 pytestmark = pytest.mark.llm
 
@@ -37,7 +34,7 @@ def test_proper_noun_is_junk(claude):
             "existing": [],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     assignments = out["winston"]["assignments"]
     assert len(assignments) == 1
@@ -56,7 +53,7 @@ def test_language_populates_translation_field(claude):
             "existing": [],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups, language="French")
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN, language="French")
 
     card = out["afflict"]["new_cards"][0]
     assert card["translation"].strip(), "translation must be present and non-empty"
@@ -72,7 +69,7 @@ def test_no_language_omits_translation_field(claude):
             "existing": [],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)  # no language
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)  # no language
 
     card = out["afflict"]["new_cards"][0]
     assert "translation" not in card
@@ -84,7 +81,7 @@ def test_polysemy_splits_into_two_cards_with_verbatim_spans(claude):
         one_context("L2", "She deposited the cheque at the bank downtown."),
     ]
     groups = [{"stem": "bank", "contexts": contexts, "existing": []}]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["bank"]
     assert len(g["new_cards"]) == 2
@@ -123,7 +120,7 @@ def test_distinct_sense_from_existing_card_becomes_new(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["sordid"]
     a = g["assignments"][0]
@@ -152,7 +149,7 @@ def test_distinct_sense_from_existing_phrasal_becomes_new(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["follow"]
     a = g["assignments"][0]
@@ -184,7 +181,7 @@ def test_synonym_with_different_headword_becomes_new(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["couch"]
     a = g["assignments"][0]
@@ -216,7 +213,7 @@ def test_bare_stem_not_merged_into_existing_phrasal(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["follow"]
     a = g["assignments"][0]
@@ -249,7 +246,7 @@ def test_same_sense_as_existing_phrasal_is_existing(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["follow"]
     a = g["assignments"][0]
@@ -283,7 +280,7 @@ def test_existing_match_picks_correct_index_among_several(claude):
             ],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["bank"]
     a = g["assignments"][0]
@@ -304,7 +301,7 @@ def test_inflected_verb_headword_is_infinitive(claude):
             "existing": [],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["outdo"]
     a = g["assignments"][0]
@@ -323,7 +320,7 @@ def test_same_sense_lookups_collapse_into_one_card(claude):
         one_context("L2", "A rare condition afflicted her for years."),
     ]
     groups = [{"stem": "afflict", "contexts": contexts, "existing": []}]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["afflict"]
     assert len(g["new_cards"]) == 1
@@ -346,7 +343,7 @@ def test_span_copied_from_primary_sentence(claude):
         one_context("L2", "Such ailments afflict the elderly most.", timestamp=5),
     ]
     groups = [{"stem": "afflict", "contexts": contexts, "existing": []}]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["afflict"]
     # Precondition: same sense collapses to one card.
@@ -388,7 +385,7 @@ def test_batch_of_groups_each_returns_one_result(claude):
             "existing": [],
         },
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     # Exactly one result per input group.
     assert set(out) >= {"afflict", "winston", "bank"}
@@ -415,7 +412,7 @@ def test_phrasal_verb_promoted_to_expression_headword(claude):
             "existing": [],
         }
     ]
-    out = cluster_groups(claude, CHEAP_MODEL, groups)
+    out = cluster_groups(claude, CHEAP_MODEL, groups, learning=EN)
 
     g = out["make"]
     a = g["assignments"][0]

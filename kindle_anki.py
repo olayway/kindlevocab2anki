@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["anthropic>=0.70", "genanki>=0.13"]
+# dependencies = ["anthropic>=0.70", "genanki>=0.13", "pyyaml>=6"]
 # ///
 """Import Kindle Vocabulary Builder lookups into Anki as production cards.
 
@@ -45,7 +45,6 @@ STATE_JSON = SCRIPT_DIR / "deck_state.json"  # offline (--export) source of trut
 ENV_FILE = SCRIPT_DIR / ".env"
 
 ANKI_URL = "http://127.0.0.1:8765"
-DECK_NAME = "English::Kindle"
 MODEL_NAME = "Kindle Vocab"
 TRANSLATION_FIELD = "Translation"  # populated only when --language is given
 FIELDS = [
@@ -71,61 +70,94 @@ BATCH_SIZE = 40
 # Two independent axes:
 #   * the LEARNING language (--learning) is the language you're studying. It
 #     gates which vocab.db lookups are read (Kindle's WORDS.lang), and it sets
-#     the headword/definition rules and the blank_out strategy.
+#     the headword/definition rules and the blank_out flags.
 #   * the TRANSLATION language (--language) is your native tongue, glossed on
 #     the back of the card only. It is orthogonal to the learning language.
+#
+# Profiles are data, not code: they live in languages.yaml beside this script,
+# so adding or tuning a language never touches the source. Each entry is keyed
+# by its Kindle WORDS.lang code and carries a display name, the three blanking
+# flags (see blank_out), and a morphology fragment spliced into the prompt.
+
+LANGUAGES_FILE = SCRIPT_DIR / "languages.yaml"
+DEFAULT_LEARNING_CODE = "en"
 
 
 @dataclass(frozen=True)
 class LanguageProfile:
-    code: str  # Kindle WORDS.lang value → the SQL gate
+    code: str  # Kindle WORDS.lang value → the SQL gate (the yaml key)
     name: str  # human name injected into the prompt ("French")
-    script: str  # "spaced" | "cjk" → picks the blank_out strategy
     morphology: str  # prompt fragment: native base-form + expression rules
+    boundaries: bool  # blank_out: wrap matches in word boundaries (\b…\b)
+    ignore_case: bool  # blank_out: match case-insensitively
+    inflection: bool  # blank_out: fall back to inflected word/stem (word\w*)
 
 
-LANGUAGES = {
-    "en": LanguageProfile(
-        "en",
-        "English",
-        "spaced",
-        'verbs to the bare infinitive ("outdid" → "outdo", "ran off" → "run '
-        'off"), nouns singular; promote phrasal verbs to the whole expression '
-        '("make off with").',
-    ),
-    "fr": LanguageProfile(
-        "fr",
-        "French",
-        "spaced",
-        'verbs to the infinitive ("mangeait" → "manger"), adjectives to the '
-        'masculine singular ("heureuse" → "heureux"), nouns singular without '
-        'article; promote locutions to the whole expression ("faire la queue").',
-    ),
-    "de": LanguageProfile(
-        "de",
-        "German",
-        "spaced",
-        "verbs to the infinitive, reattaching separable prefixes "
-        '("machte … auf" → "aufmachen"); nouns singular, capitalised.',
-    ),
-    "es": LanguageProfile(
-        "es",
-        "Spanish",
-        "spaced",
-        'verbs to the infinitive ("comía" → "comer"), adjectives to the '
-        "masculine singular, nouns singular without article; promote locutions "
-        "to the whole expression.",
-    ),
-    "ja": LanguageProfile(
-        "ja",
-        "Japanese",
-        "cjk",
-        "verbs and adjectives to their dictionary form (辞書形). There is no "
-        "word spacing, so each span is an exact substring — do not split on "
-        "whitespace.",
-    ),
+_REQUIRED_FIELDS = {
+    "name": str,
+    "morphology": str,
+    "boundaries": bool,
+    "ignore_case": bool,
+    "inflection": bool,
 }
-DEFAULT_LEARNING = LANGUAGES["en"]
+
+
+def load_languages(path: Path = LANGUAGES_FILE) -> dict[str, LanguageProfile]:
+    """Parse languages.yaml into {code: LanguageProfile}.
+
+    The file is the sole source of language data — there is no in-code
+    fallback, so anything wrong here is fatal rather than silently patched:
+    a missing/malformed file, or an entry missing a required field or giving
+    one the wrong type, stops the run with a message naming the culprit.
+    """
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - uv installs this
+        raise Fatal(f"The pyyaml package is unavailable: {exc}") from exc
+
+    if not path.exists():
+        raise Fatal(
+            f"Language config {path} not found. It ships beside the script and "
+            "defines every learning language; restore it or point the script at "
+            "a copy."
+        )
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise Fatal(f"{path} is not valid YAML ({exc}). Fix or restore it.")
+    if not isinstance(data, dict):
+        raise Fatal(f"{path} must be a mapping of language code → profile.")
+
+    profiles: dict[str, LanguageProfile] = {}
+    for code, entry in data.items():
+        where = f"{path}: language {code!r}"
+        if not isinstance(entry, dict):
+            raise Fatal(f"{where} must be a mapping of fields, got {type(entry).__name__}.")
+        for field, want in _REQUIRED_FIELDS.items():
+            if field not in entry:
+                raise Fatal(f"{where} is missing required field {field!r}.")
+            # bool is a subclass of int, so guard it explicitly both ways.
+            value = entry[field]
+            if want is bool and not isinstance(value, bool):
+                raise Fatal(f"{where} field {field!r} must be true/false.")
+            if want is str and (not isinstance(value, str) or isinstance(value, bool)):
+                raise Fatal(f"{where} field {field!r} must be text.")
+        profiles[str(code).lower()] = LanguageProfile(
+            code=str(code).lower(),
+            name=entry["name"],
+            morphology=entry["morphology"],
+            boundaries=entry["boundaries"],
+            ignore_case=entry["ignore_case"],
+            inflection=entry["inflection"],
+        )
+    if not profiles:
+        raise Fatal(f"{path} defines no languages.")
+    return profiles
+
+
+def deck_name_for(learning: LanguageProfile) -> str:
+    """Deck a run writes to: a Kindle subdeck under the language's own parent."""
+    return f"{learning.name}::Kindle"
 
 # Fixed ids so genanki reuses the same note type / deck across runs and
 # re-imports of a regenerated .apkg update in place instead of duplicating.
@@ -304,7 +336,15 @@ def matches_books(lk: Lookup, patterns: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
-def blank_out(sentence: str, span, word: str, stem: str, script: str = "spaced") -> str:
+def blank_out(
+    sentence: str,
+    span,
+    word: str,
+    stem: str,
+    boundaries: bool = True,
+    ignore_case: bool = True,
+    inflection: bool = True,
+) -> str:
     """Replace the answer with a blank; try Claude's span(s), then word, then stem.
 
     `span` is the exact surface span Claude asked us to hide. It may be a
@@ -314,47 +354,51 @@ def blank_out(sentence: str, span, word: str, stem: str, script: str = "spaced")
     or we fall back rather than emit a half-blanked sentence. If nothing
     matches, leave the sentence intact rather than mangle it.
 
-    `script` selects the matching strategy. "spaced" (Latin, Cyrillic, …) uses
-    word boundaries, case-insensitivity, and a suffix-inflection fallback.
-    "cjk" (Japanese, Chinese, Thai) has no word boundaries or case, so it
-    matches the exact span verbatim and skips the inflection fallback entirely.
+    Three flags (from the language profile) drive the matcher:
+      * `boundaries` — wrap each match in word boundaries (\\b…\\b). On for
+        spaced scripts (Latin, Cyrillic, …); off for scripts with no word
+        breaks (Japanese, Chinese, Thai), where matches are plain substrings.
+      * `ignore_case` — match case-insensitively. Off for caseless scripts.
+      * `inflection` — after the span(s), fall back to the inflected word then
+        stem (`word\\w*`) to catch e.g. "afflict" → "afflicted". Off where a
+        suffix expansion is meaningless, so only the exact span is hidden.
     """
+    flags = re.IGNORECASE if ignore_case else 0
+    edge = r"\b" if boundaries else ""
+
     parts = [span] if isinstance(span, str) else list(span or [])
     parts = [p for p in parts if p]
-    if script == "cjk":
-        # No word boundaries, no case, no suffix inflation: verbatim only.
-        if not parts:
-            return sentence
-        blanked = sentence
-        for part in parts:
-            if part not in blanked:
-                return sentence  # all-or-nothing, same contract as below
-            blanked = blanked.replace(part, BLANK)
-        return blanked
     if parts:
         # Exact surface form(s) — match verbatim, no inflection expansion.
         blanked = sentence
         for part in parts:
-            pattern = re.compile(rf"\b{re.escape(part)}\b", re.IGNORECASE)
+            pattern = re.compile(rf"{edge}{re.escape(part)}{edge}", flags)
             blanked, n = pattern.subn(BLANK, blanked)
             if not n:
                 break  # all-or-nothing: fall through to word/stem
         else:
             return blanked
-    for candidate in (word, stem):
-        if not candidate:
-            continue
-        # Fallback: expand to catch inflections ("afflict" -> "afflicted").
-        pattern = re.compile(rf"\b{re.escape(candidate)}\w*\b", re.IGNORECASE)
-        blanked, n = pattern.subn(BLANK, sentence)
-        if n:
-            return blanked
+    if inflection:
+        for candidate in (word, stem):
+            if not candidate:
+                continue
+            # Fallback: expand to catch inflections ("afflict" -> "afflicted").
+            pattern = re.compile(rf"{edge}{re.escape(candidate)}\w*{edge}", flags)
+            blanked, n = pattern.subn(BLANK, sentence)
+            if n:
+                return blanked
     return sentence
 
 
 def book_tag(title: str) -> str:
-    slug = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", slug).strip("-").lower()
+    # Keep the title's own script: only Anki's structural characters need to go.
+    # Anki tags are space-delimited and use "::" for hierarchy, so collapse any
+    # whitespace and separators to a single "-"; everything else (Latin, CJK,
+    # Cyrillic, digits) is preserved so non-Latin titles keep a real tag.
+    slug = unicodedata.normalize("NFKC", title)
+    slug = re.sub(r"[\s:]+", "-", slug)  # whitespace and colons → separator
+    slug = re.sub(r"[^\w-]+", "", slug, flags=re.UNICODE)  # drop other punctuation
+    slug = re.sub(r"-{2,}", "-", slug).strip("-_").casefold()
     return f"book::{slug or 'unknown'}"
 
 
@@ -402,8 +446,9 @@ def build_notes(
     stem: str,
     lookups: list[Lookup],
     response: dict,
+    deck_name: str,
+    learning: LanguageProfile,
     translate: bool = False,
-    script: str = "spaced",
 ) -> BuildResult:
     """Turn Claude's per-group response into note payloads + outcomes.
 
@@ -449,7 +494,9 @@ def build_notes(
                 card.get("span", []),
                 primary.word,
                 primary.stem,
-                script,
+                learning.boundaries,
+                learning.ignore_case,
+                learning.inflection,
             ),
             "Source": primary.source,
             "LookupDate": primary.date,
@@ -459,7 +506,7 @@ def build_notes(
             fields[TRANSLATION_FIELD] = card.get("translation", "")
         notes.append(
             {
-                "deckName": DECK_NAME,
+                "deckName": deck_name,
                 "modelName": MODEL_NAME,
                 "fields": fields,
                 "tags": ["kindle", book_tag(primary.title)],
@@ -476,9 +523,10 @@ def apply_new_cards(
     new_lookups: list[Lookup],
     existing_index: dict[str, list[dict]],
     skipped: dict,
+    learning: LanguageProfile,
+    deck_name: str,
     batch_size: int = 40,
     language: str | None = None,
-    learning: LanguageProfile = DEFAULT_LEARNING,
     sink: "Sink | None" = None,
 ) -> tuple[int, int, int]:
     """Cluster new lookups in batches and write the outcomes through `sink`.
@@ -510,8 +558,9 @@ def apply_new_cards(
                 stem,
                 lks,
                 response,
+                deck_name,
+                learning,
                 translate=bool(language),
-                script=learning.script,
             )
 
             if result.notes:
@@ -587,14 +636,14 @@ def anki(action: str, retries: int = 3, **params):
     return body["result"]
 
 
-def fetch_notes_for_stems(stems: list[str], chunk: int = 100) -> list[dict]:
+def fetch_notes_for_stems(stems: list[str], deck_name: str, chunk: int = 100) -> list[dict]:
     """notesInfo for every deck card whose Stem is in `stems` (chunked query)."""
     if not stems:
         return []
     note_ids: list[int] = []
     for i in range(0, len(stems), chunk):
         terms = " OR ".join(f'"Stem:{s}"' for s in stems[i : i + chunk])
-        query = f'deck:"{DECK_NAME}" ({terms})'
+        query = f'deck:"{deck_name}" ({terms})'
         note_ids.extend(anki("findNotes", query=query))
     if not note_ids:
         return []
@@ -772,10 +821,10 @@ def ensure_model(layout: str = DEFAULT_LAYOUT) -> None:
     print(f"Created note type {MODEL_NAME!r}")
 
 
-def ensure_deck() -> None:
-    if DECK_NAME not in anki("deckNames"):
-        anki("createDeck", deck=DECK_NAME)
-        print(f"Created deck {DECK_NAME!r}")
+def ensure_deck(deck_name: str) -> None:
+    if deck_name not in anki("deckNames"):
+        anki("createDeck", deck=deck_name)
+        print(f"Created deck {deck_name!r}")
 
 
 # --------------------------------------------------------------------------
@@ -869,9 +918,16 @@ class ApkgSink(Sink):
     place rather than duplicate — so one file is always the whole deck.
     """
 
-    def __init__(self, out_path: Path, state: list[dict], layout: str = DEFAULT_LAYOUT):
+    def __init__(
+        self,
+        out_path: Path,
+        state: list[dict],
+        deck_name: str,
+        layout: str = DEFAULT_LAYOUT,
+    ):
         self.out_path = out_path
         self.state = state
+        self.deck_name = deck_name
         self.layout = layout
         self.by_id = {c["card_id"]: c for c in state}
 
@@ -897,7 +953,7 @@ class ApkgSink(Sink):
 
     def finalize(self) -> None:
         save_state(self.state)
-        write_apkg(self.out_path, self.state, self.layout)
+        write_apkg(self.out_path, self.state, self.deck_name, self.layout)
 
 
 def build_genanki_model(layout: str = DEFAULT_LAYOUT):
@@ -917,7 +973,9 @@ def build_genanki_model(layout: str = DEFAULT_LAYOUT):
     )
 
 
-def write_apkg(out_path: Path, notes: list[dict], layout: str = DEFAULT_LAYOUT) -> None:
+def write_apkg(
+    out_path: Path, notes: list[dict], deck_name: str, layout: str = DEFAULT_LAYOUT
+) -> None:
     """Write card records to an .apkg at `out_path`.
 
     Each record needs `fields` (keyed by FIELDS) and optional `tags`; the GUID
@@ -926,7 +984,7 @@ def write_apkg(out_path: Path, notes: list[dict], layout: str = DEFAULT_LAYOUT) 
     import genanki
 
     model = build_genanki_model(layout)
-    deck = genanki.Deck(GENANKI_DECK_ID, DECK_NAME)
+    deck = genanki.Deck(GENANKI_DECK_ID, deck_name)
     for note in notes:
         fields = note["fields"]
         deck.add_note(
@@ -1000,20 +1058,25 @@ def resolve_layout(cli_value: str | None) -> str:
     return value
 
 
-def resolve_learning(cli_value: str | None) -> LanguageProfile:
+def resolve_learning(
+    cli_value: str | None, languages: dict[str, LanguageProfile]
+) -> LanguageProfile:
     """The language being studied: CLI flag, else LEARNING_LANGUAGE in .env, else English.
 
-    Accepts a code ("fr") case-insensitively; raises Fatal on an unknown one.
+    Accepts a code ("fr") case-insensitively; raises Fatal on one not defined
+    in languages.yaml (including a removed default) — never a silent fallback.
     """
-    code = (cli_value or os.environ.get("LEARNING_LANGUAGE") or "en").strip().lower()
-    if code not in LANGUAGES:
-        known = ", ".join(sorted(LANGUAGES))
+    code = (
+        cli_value or os.environ.get("LEARNING_LANGUAGE") or DEFAULT_LEARNING_CODE
+    ).strip().lower()
+    if code not in languages:
+        known = ", ".join(sorted(languages))
         raise Fatal(f"Unknown --learning {code!r}. Known languages: {known}.")
-    return LANGUAGES[code]
+    return languages[code]
 
 
 def cluster_system_prompt(
-    learning: LanguageProfile = DEFAULT_LEARNING, language: str | None = None
+    learning: LanguageProfile, language: str | None = None
 ) -> str:
     """System prompt for the clustering call.
 
@@ -1172,8 +1235,8 @@ def cluster_groups(
     client,
     model: str,
     groups: list[dict],
+    learning: LanguageProfile,
     effort: str | None = None,
-    learning: LanguageProfile = DEFAULT_LEARNING,
     language: str | None = None,
 ):
     """Send stem-groups to Claude; return {stem: {stem, new_cards, assignments}}.
@@ -1224,13 +1287,24 @@ def report(candidates: list[Lookup], label: str) -> None:
         print(f"  {count:>4}  {title}")
 
 
-def preview(candidates: list[Lookup], n: int = 3, script: str = "spaced") -> None:
+def preview(candidates: list[Lookup], learning: LanguageProfile, n: int = 3) -> None:
     if not candidates:
         return
     print("\nSample cards (definitions are generated on --apply):")
     for lk in candidates[:n]:
         print(f"\n  Front: <definition of {lk.stem!r}>")
-        print(f"         {blank_out(lk.sentence, '', lk.word, lk.stem, script)}")
+        print(
+            "         "
+            + blank_out(
+                lk.sentence,
+                "",
+                lk.word,
+                lk.stem,
+                learning.boundaries,
+                learning.ignore_case,
+                learning.inflection,
+            )
+        )
         print(f"  Back:  {lk.stem}   [{lk.source}]")
 
 
@@ -1272,7 +1346,7 @@ def main(argv: list[str]) -> int:
         metavar="CODE",
         help="language you're studying, e.g. 'fr' (default: en; falls back to "
         "LEARNING_LANGUAGE in .env). Sets which lookups are read and how cards "
-        f"are built. Known: {', '.join(sorted(LANGUAGES))}",
+        "are built. Defined in languages.yaml beside this script.",
     )
     parser.add_argument(
         "--language",
@@ -1300,7 +1374,9 @@ def main(argv: list[str]) -> int:
     offline = export_path is not None
 
     load_env()  # so --learning/--language honour .env in dry runs too (setdefault)
-    learning = resolve_learning(args.learning)
+    languages = load_languages()
+    learning = resolve_learning(args.learning, languages)
+    deck_name = deck_name_for(learning)
     language = resolve_language(args.language)
     layout = resolve_layout(args.layout)
     if layout == "translation" and not language:
@@ -1333,8 +1409,8 @@ def main(argv: list[str]) -> int:
             print(f"--reset: cleared deck_state.json ({'was present' if existed else 'was empty'}) and skipped.json")
         else:
             ensure_model(layout)
-            ensure_deck()
-            ids = anki("findNotes", query=f'deck:"{DECK_NAME}"')
+            ensure_deck(deck_name)
+            ids = anki("findNotes", query=f'deck:"{deck_name}"')
             if ids:
                 anki("deleteNotes", notes=ids)
             save_skipped({})
@@ -1348,7 +1424,7 @@ def main(argv: list[str]) -> int:
         notes_info = state_to_notes_info(state)
     else:
         state = None
-        notes_info = [] if wiped else fetch_notes_for_stems(stems)
+        notes_info = [] if wiped else fetch_notes_for_stems(stems, deck_name)
     existing_index = build_existing_index(notes_info)
 
     new_lookups = determine_new_lookups(selected, notes_info, set(skipped))
@@ -1362,7 +1438,7 @@ def main(argv: list[str]) -> int:
     report(new_lookups, "To import")
 
     if not args.apply:
-        preview(new_lookups, script=learning.script)
+        preview(new_lookups, learning)
         print("\nDry run — nothing written. Re-run with --apply to commit.")
         return 0
 
@@ -1382,10 +1458,10 @@ def main(argv: list[str]) -> int:
         raise Fatal(f"The anthropic package is unavailable: {exc}") from exc
 
     if offline:
-        sink: Sink = ApkgSink(export_path, state, layout)
+        sink: Sink = ApkgSink(export_path, state, deck_name, layout)
     else:
         ensure_model(layout)
-        ensure_deck()
+        ensure_deck(deck_name)
         sink = LiveSink()
     client = anthropic.Anthropic()
 
@@ -1400,9 +1476,10 @@ def main(argv: list[str]) -> int:
         new_lookups,
         existing_index,
         skipped,
-        args.batch_size,
-        language,
-        learning=learning,
+        learning,
+        deck_name,
+        batch_size=args.batch_size,
+        language=language,
         sink=sink,
     )
     save_skipped(skipped)
@@ -1416,7 +1493,7 @@ def main(argv: list[str]) -> int:
         )
     else:
         print(
-            f"\nDone. {added} card(s) added to {DECK_NAME}, "
+            f"\nDone. {added} card(s) added to {deck_name}, "
             f"{updated} lookup(s) linked to existing cards, "
             f"{junked} skipped as junk."
         )

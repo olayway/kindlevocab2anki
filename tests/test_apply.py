@@ -7,6 +7,9 @@ added, existing verdicts append to the matched note, junk lands in skipped.
 
 import kindle_anki
 from kindle_anki import Lookup, apply_new_cards
+from tests.conftest import EN
+
+DECK = "English::Kindle"
 
 
 def lk(id, stem, sentence, ts):
@@ -77,6 +80,8 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
         new_lookups=new_lookups,
         existing_index=existing_index,
         skipped=skipped,
+        learning=EN,
+        deck_name=DECK,
     )
 
     assert (added, updated, junked) == (1, 1, 1)
@@ -129,6 +134,8 @@ def test_language_is_threaded_and_translation_written(tmp_path, monkeypatch):
         new_lookups=[lk("L1", "bank", "We sat on the river bank.", 1)],
         existing_index={},
         skipped={},
+        learning=EN,
+        deck_name=DECK,
         language="French",
     )
 

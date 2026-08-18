@@ -5,7 +5,9 @@ we monkeypatch it with a fake so no running Anki is needed.
 import pytest
 
 import kindle_anki
-from kindle_anki import DECK_NAME, Fatal
+from kindle_anki import Fatal
+
+DECK = "English::Kindle"
 
 
 class _FakeResp:
@@ -73,11 +75,11 @@ def test_fetch_notes_chunks_queries_and_aggregates(monkeypatch):
 
     monkeypatch.setattr(kindle_anki, "anki", fake_anki)
 
-    info = kindle_anki.fetch_notes_for_stems(["a", "b", "c"], chunk=2)
+    info = kindle_anki.fetch_notes_for_stems(["a", "b", "c"], DECK, chunk=2)
 
     assert len(queries) == 2
-    assert queries[0] == f'deck:"{DECK_NAME}" ("Stem:a" OR "Stem:b")'
-    assert queries[1] == f'deck:"{DECK_NAME}" ("Stem:c")'
+    assert queries[0] == f'deck:"{DECK}" ("Stem:a" OR "Stem:b")'
+    assert queries[1] == f'deck:"{DECK}" ("Stem:c")'
     assert [n["noteId"] for n in info] == [1, 2]
 
 
@@ -86,7 +88,7 @@ def test_fetch_notes_returns_empty_without_hitting_anki(monkeypatch):
         raise AssertionError("anki() should not be called for empty stems")
 
     monkeypatch.setattr(kindle_anki, "anki", boom)
-    assert kindle_anki.fetch_notes_for_stems([]) == []
+    assert kindle_anki.fetch_notes_for_stems([], DECK) == []
 
 
 def test_record_existing_link_appends_id_to_lookups(monkeypatch):
