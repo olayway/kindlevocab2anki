@@ -1,40 +1,25 @@
-# Kindle Vocabulary to Anki
+# Kindle Vocabulary to Anki 🚧
 
 Turns the words you look up while reading on a Kindle into Anki flashcards — one card per **sense**, not per word. Claude reads the sentence each lookup appeared in, splits a word's distinct meanings into separate cards, builds cards for the phrasal verb or idiom a word belongs to, and merges repeat lookups of the same sense.
 
 You see a definition and the sentence with the answer blanked out; you recall the word. The back confirms it — and, if you turn on translations, adds a translation of that same sense into your native language.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  to cause suffering or trouble to; to distress          │   front
-│  physically or mentally                                 │
-│                                                         │
-│  There has been a revolution in medicine concerning     │
-│  how we think about the diseases that now _____ us.     │
-├─────────────────────────────────────────────────────────┤
-│  afflict                                                │   back
-│  dotykać, trapić, nękać                                 │
-│  Why Zebras Don't Get Ulcers — Sapolsky · 2026-06-09    │
-└─────────────────────────────────────────────────────────┘
-```
+![](definition-layout.png)
+
+> [!NOTE]
+> **Why not the existing Kindle → Anki tools?** Most work at the word level — one card per lookup, lemma on the front, a dictionary entry on the back. Without reading the sentence they can't tell `bank` (river) from `bank` (money), can't promote a tap on `made` into a **make off** card, and duplicate a word looked up in two senses. This tool reads the sentence with Claude and builds one card per _meaning_.
 
 Translations are **off by default** and configurable: pass `--language French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. By default it sits on the **back only** — putting it on the front would turn recall into translation; there it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front and reveals the definition on the back — see [Card layout](#card-layout).
 
 ## Features
 
-Each line pairs a behavior with the reasoning behind it; follow the link for the full detail.
-
 - **Sense-aware, not word-aware** — one card per _meaning_, not per lemma: polysemy is split into separate cards, phrasal verbs and idioms are promoted to their real headword, headwords are stored in dictionary form, repeat lookups of one sense merge, and junk is rejected. Kindle records raw taps; a good deck needs meanings, and only reading the sentence can tell them apart. → [Sense-aware, not word-aware](#sense-aware-not-word-aware)
-- **Cloze-style recall** — the front is a definition plus the original sentence with the answer blanked out; you recall the word, and the back confirms it. Recalling from a real context you met beats staring at an isolated word. → [Blanking](#blanking)
-- **Optional back-only translations** — off by default, enabled per-run with `--language`. On the front it would make you translate instead of recall; on the back it just confirms the sense. → intro, above.
-- **Switchable card layout** — the default `definition` layout prompts with the learning-language definition; `--layout translation` flips it so a beginner sees their native word on the front and the definition on the back. A definition in a language you can't read yet isn't a prompt — it's a second puzzle. Same fields, same notes; only what's revealed first changes. → [Card layout](#card-layout)
-- **Two ways to write cards** — live into a running Anki over AnkiConnect (default), or an offline `.apkg` package you import by hand (`--export`). AnkiConnect is the tightest loop; the package path needs nothing installed and works for mobile-only users. → [Offline export](#offline-export)
-- **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
-- **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
-- **Resilient writes** — read-only AnkiConnect calls retry through a dropped connection; mutating ones fail fast instead, because a blind retry could double-add a note. An interrupted run resumes cleanly from what's already saved. → [How it works](#how-it-works)
-- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database _and_ the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. When an ebook's metadata language is wrong and its lookups land under the wrong gate, `--book … --force-lang` reads them as your learning language anyway. → [Languages](#languages)
-- **Auto database handling** — the Kindle's `vocab.db` is copied off the device to a local cache before anything reads it (SQLite on a removable FAT volume shouldn't be opened in place), so later runs work with the Kindle unplugged; `--db PATH` overrides detection. → [How it works](#how-it-works)
-- **One file, zero install** — the whole tool is a single script with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, so `uv run kindle_anki.py` fetches everything on first run and there's nothing to `pip install`. → [Files](#files)
+- **Recall from context, not a word list** — every card shows a definition and the real sentence the word appeared in with the answer blanked out, so you recall the word from its meaning in context. The blank tracks the exact span, including split phrasal verbs (`["tied", "up"]` in "she _tied_ her hair _up_"), and falls back gracefully rather than mangling the sentence. → [Blanking](#blanking)
+- **Study any language, gloss into yours** — pick the language you're learning with `--learning` (English, French, German, Spanish, Japanese ship in [`languages.yaml`](languages.yaml); adding one is a data entry, not a code change), and optionally add a translation into your native language on the back with `--language`. The two are independent and compose freely. → [Languages](#languages)
+- **Layouts for your level** — cards prompt with the learning-language definition by default; total beginners can flip to `--layout translation` to be prompted with their native word instead, since a definition you can't read yet isn't a prompt. Preview the exact look in a browser before building a deck. → [Card layout](#card-layout)
+- **Safe to re-run — it only adds what's missing** — the hidden `Lookups` field on each card is the source of truth, so repeat runs cost nothing for words you already have. Delete or edit a card in Anki and it's rebuilt next run (self-healing); to drop a card for good, suspend it. → [State and re-runs](#state-and-re-runs)
+- **Dry run by default, cost under your control** — the plain command spends nothing on Claude and shows a per-book breakdown before you commit; `--apply --limit N` lets you sample real cards and check the spend before importing the rest. → [Quick start](#quick-start)
+- **Works without a running Anki** — `--export deck.apkg` writes a standard Anki package you import by hand (or sync to a phone), with no AnkiConnect required. It's a cumulative, dedup-safe snapshot: re-importing updates cards in place instead of duplicating them. → [Offline export](#offline-export)
 
 ## Sense-aware, not word-aware
 
@@ -81,12 +66,12 @@ uv run kindle_anki.py --learning fr --book "Petit Prince" --force-lang --apply
 Languages are **data, not code**: they live in [`languages.yaml`](languages.yaml) beside the script, keyed by their Kindle `WORDS.lang` code. `en`, `fr`, `de`, `es`, and `ja` ship in it. Adding one is a new entry — no source edits:
 
 ```yaml
-nl:                       # the WORDS.lang code (also the SQL gate)
-  name: Dutch             # spliced into the prompt and the deck ("Dutch::Kindle")
-  boundaries: true        # blanking: match on word boundaries (\b…\b)
-  ignore_case: true       # blanking: match case-insensitively
-  inflection: true        # blanking: fall back to the inflected word/stem
-  morphology: >-          # prompt fragment: how to normalize a headword
+nl: # the WORDS.lang code (also the SQL gate)
+  name: Dutch # spliced into the prompt and the deck ("Dutch::Kindle")
+  boundaries: true # blanking: match on word boundaries (\b…\b)
+  ignore_case: true # blanking: match case-insensitively
+  inflection: true # blanking: fall back to the inflected word/stem
+  morphology: >- # prompt fragment: how to normalize a headword
     verbs to the infinitive; nouns singular; promote expressions to the whole.
 ```
 
@@ -160,7 +145,7 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do.                                                                                                                                                       |
 | `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                                                                                                                                                                       |
 | `--book SUB`         | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any.                                                                                                                                                                                                                                  |
-| `--force-lang`       | Read `--book`'s lookups as your `--learning` language, ignoring the language Kindle stored for them. For ebooks whose metadata language is wrong, so their lookups never match the normal gate. **Requires `--book`.** See [Mislabeled books](#mislabeled-books).                                                                    |
+| `--force-lang`       | Read `--book`'s lookups as your `--learning` language, ignoring the language Kindle stored for them. For ebooks whose metadata language is wrong, so their lookups never match the normal gate. **Requires `--book`.** See [Mislabeled books](#mislabeled-books).                                                                |
 | `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                                                                                                                                                                            |
 | `--model ID`         | Claude model (default `claude-sonnet-5`).                                                                                                                                                                                                                                                                                        |
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                                                                                                                                                                        |
@@ -257,10 +242,6 @@ That self-heal is also the catch for **a card you want gone** — say a word you
 
 Keyed by `LOOKUPS.id` → reason, so junk isn't paid to be re-judged every run. It's rewritten after every batch, so an interrupted run resumes cleanly. `--reset` clears it (and the deck) for a full rebuild.
 
-## Cost
-
-Rough order of magnitude for ~400 lookups at `claude-sonnet-5` prices: **a couple of dollars**, in about ten requests. Run `--apply --limit 40` first and check the actual spend in the Anthropic console before doing the rest. Cheaper: `--model claude-sonnet-5`, or a smaller `--batch-size` if you see truncation.
-
 ## Tests
 
 Pure logic, the Anki HTTP boundary, and the filesystem are covered by fast offline tests; the Claude clustering step has a few real-API behavioral evals that are **deselected by default** (they cost money):
@@ -295,16 +276,16 @@ Delete the card in Anki. Its lookup ids leave the consumed set and get reprocess
 
 ## Files
 
-|                    |                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| `kindle_anki.py`   | the whole tool — one file, PEP 723 inline dependencies                                      |
+|                    |                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| `kindle_anki.py`   | the whole tool — one file, PEP 723 inline dependencies                                         |
 | `languages.yaml`   | learning-language profiles (name, blanking flags, morphology) — edit to add or tune a language |
-| `preview_cards.py` | render the card templates to `card_preview.html` for previewing in a browser                |
-| `tests/`           | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                          |
-| `.env`             | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
-| `vocab.db`         | cached copy of the Kindle database (git-ignored)                                            |
-| `skipped.json`     | junk lookup ids → reason (git-ignored)                                                      |
-| `deck_state.json`  | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored)          |
+| `preview_cards.py` | render the card templates to `card_preview.html` for previewing in a browser                   |
+| `tests/`           | pytest suite (`pytest.ini` sets it up; `-m llm` for the API evals)                             |
+| `.env`             | `ANTHROPIC_API_KEY` (required) plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600)    |
+| `vocab.db`         | cached copy of the Kindle database (git-ignored)                                               |
+| `skipped.json`     | junk lookup ids → reason (git-ignored)                                                         |
+| `deck_state.json`  | offline deck state for `--export`: cards + their consumed lookup ids (git-ignored)             |
 
 ## A note on backups
 
