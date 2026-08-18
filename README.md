@@ -9,10 +9,9 @@ You see a definition and the sentence with the answer blanked out; you recall th
 
 ![](definition-layout.png)
 
-> [!NOTE]
-> **Why not the existing Kindle → Anki tools?** Most work at the word level — one card per lookup, lemma on the front, a dictionary entry on the back. Without reading the sentence they can't tell `bank` (river) from `bank` (money), can't promote a tap on `made` into a **make off** card, and duplicate a word looked up in two senses. This tool reads the sentence with Claude and builds one card per _meaning_.
+## Why not the existing Kindle → Anki tools?
 
-Translations are **off by default** and configurable: pass `--translation French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. By default it sits on the **back only** — putting it on the front would turn recall into translation; there it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front and reveals the definition on the back — see [Card layout](#card-layout).
+Most work at the word level — one card per lookup, lemma on the front, a dictionary entry on the back. Without reading the sentence they can't tell `bank` (river) from `bank` (money), and can't promote a tap on `made` into a **make off** card. This tool reads the sentence with Claude and builds one card per _meaning_.
 
 ## Features
 
@@ -41,7 +40,9 @@ Two independent axes control language:
 - **`--learning CODE`** — the language you're **studying**. It gates which Kindle lookups are read (via `WORDS.lang`), sets the language the definitions are written in, and picks the base-form rules (how a headword is normalized) and the blanking behavior. Default `en`. Each run writes to a per-language deck (`English::Kindle`, `French::Kindle`, …).
 - **`--translation NAME`** — your **native** language, glossed on the **back** of the card only. Optional and off by default.
 
-They compose freely: `--learning fr --translation Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back. Leave `--translation` off and the cards stay monolingual in the learning language.
+Translations are **off by default**: leave `--translation` off and the cards stay fully monolingual in the learning language. Turn it on and they compose freely — `--learning fr --translation Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back.
+
+The gloss sits on the **back only**. Putting it on the front would turn recall into translation; on the back it just confirms you landed on the right sense once you've already committed to an answer. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front instead — see [Card layout](#card-layout).
 
 ```sh
 # Study French, monolingual
