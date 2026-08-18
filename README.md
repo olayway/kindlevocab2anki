@@ -1,4 +1,7 @@
-# Kindle Vocabulary to Anki 🚧
+# Kindle Vocabulary to Anki
+
+> [!NOTE]
+> 🚧🐣 **Heads up – this is the very first version, still pretty rough around the edges!**  Flag names, defaults, and behaviour will probably shift around as things settle.
 
 Turns the words you look up while reading on a Kindle into Anki flashcards — one card per **sense**, not per word. Claude reads the sentence each lookup appeared in, splits a word's distinct meanings into separate cards, builds cards for the phrasal verb or idiom a word belongs to, and merges repeat lookups of the same sense.
 
@@ -9,13 +12,13 @@ You see a definition and the sentence with the answer blanked out; you recall th
 > [!NOTE]
 > **Why not the existing Kindle → Anki tools?** Most work at the word level — one card per lookup, lemma on the front, a dictionary entry on the back. Without reading the sentence they can't tell `bank` (river) from `bank` (money), can't promote a tap on `made` into a **make off** card, and duplicate a word looked up in two senses. This tool reads the sentence with Claude and builds one card per _meaning_.
 
-Translations are **off by default** and configurable: pass `--language French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. By default it sits on the **back only** — putting it on the front would turn recall into translation; there it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front and reveals the definition on the back — see [Card layout](#card-layout).
+Translations are **off by default** and configurable: pass `--translation French` (or set `TRANSLATION_LANGUAGE` in `.env`) and cards get a translation into that language. By default it sits on the **back only** — putting it on the front would turn recall into translation; there it just confirms you landed on the right sense once you've already committed to an answer. Leave it off and the cards stay fully monolingual. Total beginners can flip this with `--layout translation`, which prompts with the native word on the front and reveals the definition on the back — see [Card layout](#card-layout).
 
 ## Features
 
 - **Sense-aware, not word-aware** — one card per _meaning_, not per lemma: polysemy is split into separate cards, phrasal verbs and idioms are promoted to their real headword, headwords are stored in dictionary form, repeat lookups of one sense merge, and junk is rejected. Kindle records raw taps; a good deck needs meanings, and only reading the sentence can tell them apart. → [Sense-aware, not word-aware](#sense-aware-not-word-aware)
 - **Recall from context, not a word list** — every card shows a definition and the real sentence the word appeared in with the answer blanked out, so you recall the word from its meaning in context. The blank tracks the exact span, including split phrasal verbs (`["tied", "up"]` in "she _tied_ her hair _up_"), and falls back gracefully rather than mangling the sentence. → [Blanking](#blanking)
-- **Study any language, gloss into yours** — pick the language you're learning with `--learning` (English, French, German, Spanish, Japanese ship in [`languages.yaml`](languages.yaml); adding one is a data entry, not a code change), and optionally add a translation into your native language on the back with `--language`. The two are independent and compose freely. → [Languages](#languages)
+- **Study any language, gloss into yours** — pick the language you're learning with `--learning` (English, French, German, Spanish, Japanese ship in [`languages.yaml`](languages.yaml); adding one is a data entry, not a code change), and optionally add a translation into your native language on the back with `--translation`. The two are independent and compose freely. → [Languages](#languages)
 - **Layouts for your level** — cards prompt with the learning-language definition by default; total beginners can flip to `--layout translation` to be prompted with their native word instead, since a definition you can't read yet isn't a prompt. Preview the exact look in a browser before building a deck. → [Card layout](#card-layout)
 - **Safe to re-run — it only adds what's missing** — the hidden `Lookups` field on each card is the source of truth, so repeat runs cost nothing for words you already have. Delete or edit a card in Anki and it's rebuilt next run (self-healing); to drop a card for good, suspend it. → [State and re-runs](#state-and-re-runs)
 - **Dry run by default, cost under your control** — the plain command spends nothing on Claude and shows a per-book breakdown before you commit; `--apply --limit N` lets you sample real cards and check the spend before importing the rest. → [Quick start](#quick-start)
@@ -36,16 +39,16 @@ Kindle records one _lookup_ per tap — the lemma, the surface form, and the sen
 Two independent axes control language:
 
 - **`--learning CODE`** — the language you're **studying**. It gates which Kindle lookups are read (via `WORDS.lang`), sets the language the definitions are written in, and picks the base-form rules (how a headword is normalized) and the blanking behavior. Default `en`. Each run writes to a per-language deck (`English::Kindle`, `French::Kindle`, …).
-- **`--language NAME`** — your **native** language, glossed on the **back** of the card only. Optional and off by default.
+- **`--translation NAME`** — your **native** language, glossed on the **back** of the card only. Optional and off by default.
 
-They compose freely: `--learning fr --language Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back. Leave `--language` off and the cards stay monolingual in the learning language.
+They compose freely: `--learning fr --translation Polish` makes French cards (French headword, French definition, French sentence with the answer blanked) with a Polish gloss on the back. Leave `--translation` off and the cards stay monolingual in the learning language.
 
 ```sh
 # Study French, monolingual
 uv run kindle_anki.py --learning fr --apply
 
 # Study French, Polish on the back
-uv run kindle_anki.py --learning fr --language Polish --apply
+uv run kindle_anki.py --learning fr --translation Polish --apply
 ```
 
 ### Mislabeled books
@@ -81,12 +84,12 @@ The three booleans replace what used to be a fixed `spaced`/`cjk` strategy, so y
 
 Every card holds the same fields; the **layout** only decides which one prompts you on the front and which is revealed on the back. Pick it with `--layout` (or `CARD_LAYOUT` in `.env`):
 
-- **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the word, plus the native translation if `--language` is set. You recall the word from a meaning stated in the language itself.
-- **`translation`** — front: your **native** translation + the blanked sentence; back: the word and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--language`** (it errors out otherwise).
+- **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the word, plus the native translation if `--translation` is set. You recall the word from a meaning stated in the language itself.
+- **`translation`** — front: your **native** translation + the blanked sentence; back: the word and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--translation`** (it errors out otherwise).
 
 ```sh
 # Beginner French deck: Polish on the front, definition revealed on the back
-uv run kindle_anki.py --learning fr --language Polish --layout translation --apply
+uv run kindle_anki.py --learning fr --translation Polish --layout translation --apply
 ```
 
 Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on. The layout is applied **only when the `Kindle Vocab` note type is first created**; once it exists, the tool never rewrites its templates, so any tweaks you make in Anki's own card editor are left alone. To re-layout a deck that already exists, either change it in Anki (Browse → Cards…) or `--reset` and reimport. This applies to both paths: for an `.apkg`, Anki keeps the layout it already has for a note type on re-import.
@@ -138,9 +141,9 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 
 ## Options
 
-| Flag                 | Effect                                                                                                                                                                                                                                                                                                                           |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| _(none)_             | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes.                                                                                                                                                                                                                                                      |
+| Flag                | Effect                                                                                                                                                                                                                                                                                                                           |
+| --------------------| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _(none)_            | Dry run. Prints the breakdown and sample cards. No Claude calls, no writes.                                                                                                                                                                                                                                                      |
 | `--apply`            | Cluster with Claude and add notes to Anki.                                                                                                                                                                                                                                                                                       |
 | `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do.                                                                                                                                                       |
 | `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                                                                                                                                                                       |
@@ -150,8 +153,8 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--model ID`         | Claude model (default `claude-sonnet-5`).                                                                                                                                                                                                                                                                                        |
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                                                                                                                                                                        |
 | `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages).                                                                                                                                                |
-| `--language NAME`    | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`.                                                                                                                                                |
-| `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--language`. Falls back to `CARD_LAYOUT` in `.env`. See [Card layout](#card-layout). |
+| `--translation NAME` | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`.                                                                                                                                                |
+| `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--translation`. Falls back to `CARD_LAYOUT` in `.env`. See [Card layout](#card-layout). |
 | `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                                                                                                                                                                            |
 
 ```sh
@@ -204,7 +207,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 
 **4. Work out what's new — before spending any money.** The deck is queried by `Stem`, chunked ~100 stems per call. From that one pull the tool builds the set of **consumed** lookup ids (the union of every card's hidden `Lookups` field) and the **existing** cards per stem (for dedup context). A lookup is _new_ only if its id is neither consumed nor in `skipped.json`.
 
-**5. Cluster.** New lookups are grouped by stem and sent to Claude in batches. For each group Claude returns new cards (headword, definition, the exact span to blank, and — when `--language` is set — a translation) plus a verdict for every lookup: **new** (maps to one of the new cards), **existing** (same sense as a card already in the deck), or **junk**. Structured outputs pin the response to a schema so it can't come back malformed. The system prompt is marked for prompt caching.
+**5. Cluster.** New lookups are grouped by stem and sent to Claude in batches. For each group Claude returns new cards (headword, definition, the exact span to blank, and — when `--translation` is set — a translation) plus a verdict for every lookup: **new** (maps to one of the new cards), **existing** (same sense as a card already in the deck), or **junk**. Structured outputs pin the response to a schema so it can't come back malformed. The system prompt is marked for prompt caching.
 
 **6. Write to Anki.** One note per new card, with `allowDuplicate: true` — this pipeline owns dedup, so Anki's own duplicate guard is turned off. `existing` verdicts append the lookup id to the matched card's `Lookups`; `junk` verdicts go to `skipped.json`. With `--export`, the same outcomes are written to `deck_state.json` and an `.apkg` instead ([Offline export](#offline-export)).
 
@@ -215,7 +218,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 On the first `--apply` the script creates, if missing:
 
 - **Deck** `<Language>::Kindle`, named for the learning language — `English::Kindle` by default, `French::Kindle` under `--learning fr`, and so on
-- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--language`, and the template hides it when empty.
+- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--translation`, and the template hides it when empty.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the comma-joined list of the `LOOKUPS.id`s that produced or were absorbed by the card, and is the source of truth for what's already handled.

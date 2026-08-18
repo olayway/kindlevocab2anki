@@ -1,5 +1,5 @@
 """Language config split: the learning axis (--learning) vs the translation
-axis (--language).
+axis (--translation).
 
 The learning language gates which vocab.db lookups are read (WORDS.lang), and
 parametrizes the clustering prompt (definition language + base-form rules). It

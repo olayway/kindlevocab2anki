@@ -47,7 +47,7 @@ ENV_FILE = SCRIPT_DIR / ".env"
 
 ANKI_URL = "http://127.0.0.1:8765"
 MODEL_NAME = "Kindle Vocab"
-TRANSLATION_FIELD = "Translation"  # populated only when --language is given
+TRANSLATION_FIELD = "Translation"  # populated only when --translation is given
 FIELDS = [
     "Stem",
     "Word",
@@ -72,7 +72,7 @@ BATCH_SIZE = 40
 #   * the LEARNING language (--learning) is the language you're studying. It
 #     gates which vocab.db lookups are read (Kindle's WORDS.lang), and it sets
 #     the headword/definition rules and the blank_out flags.
-#   * the TRANSLATION language (--language) is your native tongue, glossed on
+#   * the TRANSLATION language (--translation) is your native tongue, glossed on
 #     the back of the card only. It is orthogonal to the learning language.
 #
 # Profiles are data, not code: they live in languages.yaml beside this script,
@@ -1473,7 +1473,7 @@ def main(argv: list[str]) -> int:
         "are built. Defined in languages.yaml beside this script.",
     )
     parser.add_argument(
-        "--language",
+        "--translation",
         metavar="NAME",
         help="add a back-of-card translation into your native language, e.g. "
         "'Polish' (default: no translation; falls back to TRANSLATION_LANGUAGE "
@@ -1485,7 +1485,7 @@ def main(argv: list[str]) -> int:
         help="card layout (default: definition; falls back to CARD_LAYOUT in "
         ".env). 'definition' prompts with the learning-language definition; "
         "'translation' prompts with your native translation on the front — for "
-        "beginners, and requires --language.",
+        "beginners, and requires --translation.",
     )
     parser.add_argument(
         "--export",
@@ -1497,11 +1497,11 @@ def main(argv: list[str]) -> int:
     export_path = Path(args.export).expanduser() if args.export else None
     offline = export_path is not None
 
-    load_env()  # so --learning/--language honour .env in dry runs too (setdefault)
+    load_env()  # so --learning/--translation honour .env in dry runs too (setdefault)
     languages = load_languages()
     learning = resolve_learning(args.learning, languages)
     deck_name = deck_name_for(learning)
-    language = resolve_language(args.language)
+    language = resolve_language(args.translation)
     layout = resolve_layout(args.layout)
     # An explicit --layout on the CLI is a request to (re-)apply that layout to
     # the note type, overwriting hand-edits; CARD_LAYOUT/.env or the default are
@@ -1510,7 +1510,7 @@ def main(argv: list[str]) -> int:
     if layout == "translation" and not language:
         raise Fatal(
             "--layout translation puts the native translation on the front, so "
-            "it needs a translation: pass --language (e.g. --language Polish) or "
+            "it needs a translation: pass --translation (e.g. --translation Polish) or "
             "set TRANSLATION_LANGUAGE in .env."
         )
 
