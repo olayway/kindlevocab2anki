@@ -141,3 +141,50 @@ def test_language_is_threaded_and_translation_written(tmp_path, monkeypatch):
 
     note = [p for a, p in calls if a == "addNotes"][0]["notes"][0]
     assert note["fields"]["Translation"] == "rive"
+
+
+def test_progress_reports_progress_in_plain_language(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(kindle_anki, "SKIPPED_JSON", tmp_path / "skipped.json")
+
+    new_lookups = [
+        lk("L1", "bank", "We sat on the river bank.", 1),
+        lk("L2", "make", "Please make the bed.", 2),
+        lk("L3", "run", "They run fast.", 3),
+    ]
+
+    def canned(stem):
+        return {
+            "stem": stem,
+            "new_cards": [{"headword": stem, "definition": "d", "span": stem}],
+            "assignments": [
+                {"lookup_id": lks[stem], "verdict": "new", "card_index": 0, "reason": ""}
+            ],
+        }
+
+    lks = {"bank": "L1", "make": "L2", "run": "L3"}
+
+    def fake_cluster(client, model, payloads, learning=None, language=None):
+        return {p["stem"].lower(): canned(p["stem"].lower()) for p in payloads}
+
+    monkeypatch.setattr(kindle_anki, "cluster_groups", fake_cluster)
+    monkeypatch.setattr(kindle_anki, "anki", lambda a, **p: list(range(len(p.get("notes", [])))))
+
+    # batch_size 1 over 3 groups -> 3 batches, one progress line each (stdout
+    # is captured, so the non-TTY per-line path runs).
+    apply_new_cards(
+        client=None,
+        model="m",
+        new_lookups=new_lookups,
+        existing_index={},
+        skipped={},
+        learning=EN,
+        deck_name=DECK,
+        batch_size=1,
+    )
+
+    out = capsys.readouterr().out
+    # Plain-language heartbeat + progress; no "clustering"/"batch"/"groups" jargon.
+    assert "clustering" not in out.lower()
+    assert "Writing card 1 of 3" in out
+    assert "1/3 words" in out
+    assert "3/3 words  ·  3 written, 0 merged, 0 skipped" in out

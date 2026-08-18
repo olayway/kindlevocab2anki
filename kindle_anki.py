@@ -28,6 +28,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -526,6 +527,89 @@ def build_notes(
     return BuildResult(notes=notes, existing=existing, junk=junk)
 
 
+def _render_bar(done: int, total: int, width: int = 22) -> str:
+    filled = round(width * done / total) if total else width
+    return "█" * filled + "·" * (width - filled)
+
+
+class _Progress:
+    """One-line card-writing progress for --apply.
+
+    On a terminal the bar overwrites itself in place; when stdout is redirected
+    it prints one line per batch so piped logs stay readable. Mid-run warnings
+    go through `note()` so they never land on top of the live bar.
+    """
+
+    def __init__(self, total_words: int):
+        self.total = total_words
+        self.tty = sys.stdout.isatty()
+        self._dangling = False  # a bar line without a trailing newline is live
+
+    def update(self, done: int, added: int, updated: int, junked: int):
+        pct = round(100 * done / self.total) if self.total else 100
+        line = (
+            f"[{_render_bar(done, self.total)}] {pct:3d}%  {done}/{self.total} words  ·  "
+            f"{added} written, {updated} merged, {junked} skipped"
+        )
+        if self.tty:
+            print(f"\r{line}\033[K", end="", flush=True)  # \033[K clears stale tail
+            self._dangling = True
+        else:
+            print(line)
+
+    def note(self, msg: str):
+        if self._dangling:
+            print()
+            self._dangling = False
+        print(msg)
+
+    def done(self):
+        if self._dangling:
+            print()
+            self._dangling = False
+
+
+class _Heartbeat:
+    """A live spinner + elapsed clock while a blocking Claude call runs, so a
+    long request never looks frozen. On a terminal it animates in place; when
+    stdout is redirected it prints the label once (no per-tick spam).
+
+    Used as a context manager around cluster_groups(): the request blocks the
+    main thread, and a daemon thread redraws the elapsed time until it exits.
+    """
+
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, label: str):
+        self.label = label
+        self.tty = sys.stdout.isatty()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self):
+        if self.tty:
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        else:
+            print(f"{self.label}…")
+        return self
+
+    def _spin(self):
+        start = time.monotonic()
+        i = 0
+        while not self._stop.wait(0.1):
+            frame = self._FRAMES[i % len(self._FRAMES)]
+            elapsed = time.monotonic() - start
+            print(f"\r{frame} {self.label} — {elapsed:0.0f}s\033[K", end="", flush=True)
+            i += 1
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+            print("\r\033[K", end="", flush=True)  # wipe the spinner line
+
+
 def apply_new_cards(
     client,
     model: str,
@@ -548,20 +632,29 @@ def apply_new_cards(
         sink = LiveSink()
     stem_items = list(group_by_stem(new_lookups).items())
     added = updated = junked = 0
+    total = len(stem_items)
+    progress = _Progress(total)
 
-    for i in range(0, len(stem_items), batch_size):
+    for i in range(0, total, batch_size):
         batch = stem_items[i : i + batch_size]
         payloads = [
             build_group_payload(stem, lks, existing_index) for stem, lks in batch
         ]
-        responses = cluster_groups(
-            client, model, payloads, learning=learning, language=language
+        first, last = i + 1, min(i + batch_size, total)
+        label = (
+            f"Writing card {first} of {total}"
+            if first == last
+            else f"Writing cards {first}–{last} of {total}"
         )
+        with _Heartbeat(label):
+            responses = cluster_groups(
+                client, model, payloads, learning=learning, language=language
+            )
 
         for stem, lks in batch:
             response = responses.get(stem)
             if response is None:
-                print(f"  ! no response for stem {stem!r} — leaving for next run")
+                progress.note(f'  ! Claude returned no card for "{stem}" — leaving it for next time')
                 continue
             result = build_notes(
                 stem,
@@ -580,7 +673,7 @@ def apply_new_cards(
             for link in result.existing:
                 idx = link["card_index"]
                 if not isinstance(idx, int) or not 0 <= idx < len(entries):
-                    print(f"  ! {stem!r}: bad existing index {idx} — skipping")
+                    progress.note(f'  ! Could not match "{stem}" to an existing card — skipping')
                     continue
                 sink.link_existing(entries[idx], link["lookup_id"])
                 updated += 1
@@ -590,7 +683,9 @@ def apply_new_cards(
                 junked += 1
 
         save_skipped(skipped)
+        progress.update(last, added, updated, junked)
 
+    progress.done()
     sink.finalize()
     return added, updated, junked
 
@@ -1498,10 +1593,11 @@ def main(argv: list[str]) -> int:
         sink = LiveSink()
     client = anthropic.Anthropic()
 
-    lang_note = f", translating to {language}" if language else ""
+    lang_note = f" (with {language} translations)" if language else ""
     print(
-        f"\nClustering {len(new_lookups)} {learning.name} lookup(s) "
-        f"with {args.model}{lang_note}…"
+        f"\nWriting {len(new_lookups)} {learning.name} card(s) with Claude"
+        f"{lang_note}. Each card is generated by {args.model}; this can take a "
+        f"minute per batch — progress is shown below.\n"
     )
     added, updated, junked = apply_new_cards(
         client,
