@@ -32,7 +32,7 @@ Each line pairs a behavior with the reasoning behind it; follow the link for the
 - **Idempotent and self-healing** — safe to run over and over; it only ever adds what's missing. Each card records the lookup ids that produced it, so re-runs are free for what you already have, and deleting a card brings its lookups back next run. The card is the source of truth, so no separate ledger can drift out of sync. → [State and re-runs](#state-and-re-runs)
 - **Cost-first workflow** — a dry run is the default (no Claude calls); `--limit`, `--book`, `--batch-size`, and a cheaper `--model` let you sample spend before committing, and prompt caching plus structured outputs keep each request lean. Nobody should pay to find out what a run would do. → [Cost](#cost)
 - **Resilient writes** — read-only AnkiConnect calls retry through a dropped connection; mutating ones fail fast instead, because a blind retry could double-add a note. An interrupted run resumes cleanly from what's already saved. → [How it works](#how-it-works)
-- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database _and_ the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. → [Languages](#languages)
+- **One learning language per run** — English by default; pass `--learning fr` (or `LEARNING_LANGUAGE` in `.env`) to read French lookups instead, etc. The learning language is the `WORDS.lang` gate on the Kindle database _and_ the language the definitions and base-form rules are written in — it's independent of the optional back-of-card translation (`--language`). Reading one language at a time keeps the definitions, blanking, and prompt sharp; other-language lookups are simply ignored, not mishandled. When an ebook's metadata language is wrong and its lookups land under the wrong gate, `--book … --force-lang` reads them as your learning language anyway. → [Languages](#languages)
 - **Auto database handling** — the Kindle's `vocab.db` is copied off the device to a local cache before anything reads it (SQLite on a removable FAT volume shouldn't be opened in place), so later runs work with the Kindle unplugged; `--db PATH` overrides detection. → [How it works](#how-it-works)
 - **One file, zero install** — the whole tool is a single script with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, so `uv run kindle_anki.py` fetches everything on first run and there's nothing to `pip install`. → [Files](#files)
 
@@ -62,6 +62,19 @@ uv run kindle_anki.py --learning fr --apply
 # Study French, Polish on the back
 uv run kindle_anki.py --learning fr --language Polish --apply
 ```
+
+### Mislabeled books
+
+`--learning fr` reads only lookups Kindle tagged `fr` in `WORDS.lang` — and Kindle takes that tag from the **ebook's metadata language, not the dictionary you looked the word up with.** Some ebooks carry the wrong language: a French title can ship tagged `en`, so every word you look up in it lands under `en`, `--learning fr` finds nothing, and the run fails with `No French lookups found`.
+
+`--force-lang` fixes this without touching the book or the database. It drops the `WORDS.lang` gate and reads the `--book` you name as your `--learning` language regardless of how Kindle tagged it:
+
+```sh
+# The "French Edition" file is tagged 'en'; read its lookups as French anyway
+uv run kindle_anki.py --learning fr --book "Petit Prince" --force-lang --apply
+```
+
+`--force-lang` **requires `--book`** — the book filter is what scopes it. Without a scope it would relabel your entire lookup history under one language (turning every English lookup into a French card), so the run stops rather than guess. Keep the `--book` substring specific enough to match only the mislabeled title; run a separate `--force-lang` pass for each such book.
 
 ### Adding or tuning a language
 
@@ -147,6 +160,7 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--reset`            | Delete every note in the deck and clear `skipped.json`, then reimport everything from scratch. With `--apply` it actually deletes; without, it just says what it would do.                                                                                                                                                       |
 | `--limit N`          | Process at most N new lookups this run. Use it to sample cost and quality.                                                                                                                                                                                                                                                       |
 | `--book SUB`         | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable; matches any.                                                                                                                                                                                                                                  |
+| `--force-lang`       | Read `--book`'s lookups as your `--learning` language, ignoring the language Kindle stored for them. For ebooks whose metadata language is wrong, so their lookups never match the normal gate. **Requires `--book`.** See [Mislabeled books](#mislabeled-books).                                                                    |
 | `--db PATH`          | Read a specific `vocab.db` instead of auto-detecting.                                                                                                                                                                                                                                                                            |
 | `--model ID`         | Claude model (default `claude-sonnet-5`).                                                                                                                                                                                                                                                                                        |
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                                                                                                                                                                        |
@@ -268,7 +282,10 @@ The evals use `claude-haiku-4-5` and assert loose properties so they survive mod
 Anki isn't running, or AnkiConnect isn't installed. Anki must stay open for the whole run — including dry runs, which query it for what's already handled.
 
 **`No vocab.db found`**
-Plug the Kindle in and confirm it mounts at `/Volumes/Kindle`, or pass `--db PATH` to a copy you already have.
+Plug the Kindle in and confirm it mounts at `/Volumes/Kindle`, or pass `--db PATH` to a copy you already have. If it prints `Kindle not mounted; using cached copy` and then can't find lookups, the Kindle isn't mounted and it fell back to a stale local `vocab.db`.
+
+**`No <language> lookups found`**
+The lookups exist but Kindle tagged them with a different `WORDS.lang` than you asked for — usually because the ebook's metadata language is wrong (e.g. a French title tagged `en`). Read them as your learning language with `--book "<title>" --force-lang`. See [Mislabeled books](#mislabeled-books).
 
 **`ANTHROPIC_API_KEY is not set`**
 Add it to `.env` in this directory as `ANTHROPIC_API_KEY=sk-ant-...`.

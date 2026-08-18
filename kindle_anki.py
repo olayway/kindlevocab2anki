@@ -233,28 +233,37 @@ def resolve_db(explicit: str | None) -> Path:
     return CACHE_DB
 
 
-def read_lookups(db_path: Path, lang: str = "en") -> list[Lookup]:
+def read_lookups(db_path: Path, lang: str | None = "en") -> list[Lookup]:
+    """Read lookups, gated to WORDS.lang == `lang`.
+
+    Pass lang=None to drop the gate and read every lookup regardless of stored
+    language — used by --force-lang, where a mislabeled book's lookups must be
+    reached despite Kindle tagging them with the wrong WORDS.lang. Callers that
+    do this must scope by book themselves (main enforces --book).
+    """
+    query = """
+        SELECT l.id     AS id,
+               w.stem   AS stem,
+               w.word   AS word,
+               l.usage  AS usage,
+               b.title  AS title,
+               b.authors AS authors,
+               l.timestamp AS ts
+        FROM LOOKUPS l
+        JOIN WORDS w      ON l.word_key = w.id
+        LEFT JOIN BOOK_INFO b ON l.book_key = b.id
+    """
+    params: tuple = ()
+    if lang is not None:
+        query += "WHERE w.lang = ?\n"
+        params = (lang,)
+    query += "ORDER BY l.timestamp ASC"
+
     uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            """
-            SELECT l.id     AS id,
-                   w.stem   AS stem,
-                   w.word   AS word,
-                   l.usage  AS usage,
-                   b.title  AS title,
-                   b.authors AS authors,
-                   l.timestamp AS ts
-            FROM LOOKUPS l
-            JOIN WORDS w      ON l.word_key = w.id
-            LEFT JOIN BOOK_INFO b ON l.book_key = b.id
-            WHERE w.lang = ?
-            ORDER BY l.timestamp ASC
-            """,
-            (lang,),
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
 
@@ -1327,6 +1336,15 @@ def main(argv: list[str]) -> int:
         "(case-insensitive, repeatable)",
     )
     parser.add_argument(
+        "--force-lang",
+        action="store_true",
+        help="read --book's lookups as your --learning language, ignoring the "
+        "language Kindle stored for them. Use when an ebook's metadata language "
+        "is wrong (e.g. a French title tagged 'en'), so its lookups never match "
+        "the normal --learning gate. Requires --book so it can't sweep the "
+        "whole database under one language.",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="cluster with Claude and write notes to Anki (default: dry run)",
@@ -1386,17 +1404,32 @@ def main(argv: list[str]) -> int:
             "set TRANSLATION_LANGUAGE in .env."
         )
 
-    db_path = resolve_db(args.db)
-    lookups = read_lookups(db_path, learning.code)
-    if not lookups:
-        raise Fatal(f"No {learning.name} lookups found in {db_path}.")
-    print(f"{len(lookups)} {learning.name} lookup(s) in {db_path.name}")
+    if args.force_lang and not args.book:
+        raise Fatal(
+            "--force-lang needs --book: it reads a named book's lookups as your "
+            "--learning language regardless of how Kindle tagged them. Without "
+            "--book it would relabel the entire database under one language."
+        )
 
+    db_path = resolve_db(args.db)
+    lookups = read_lookups(db_path, None if args.force_lang else learning.code)
     selected = [lk for lk in lookups if matches_books(lk, args.book)]
-    if args.book:
-        print(f"Book filter {args.book}: {len(selected)} lookup(s) match")
-    if not selected:
-        raise Fatal("No lookups matched the book filter.")
+
+    if args.force_lang:
+        if not selected:
+            raise Fatal(f"No lookups from book {args.book} found in {db_path}.")
+        print(
+            f"{len(selected)} lookup(s) from {args.book} read as "
+            f"{learning.name} (ignoring Kindle's stored language)"
+        )
+    else:
+        if not lookups:
+            raise Fatal(f"No {learning.name} lookups found in {db_path}.")
+        print(f"{len(lookups)} {learning.name} lookup(s) in {db_path.name}")
+        if args.book:
+            print(f"Book filter {args.book}: {len(selected)} lookup(s) match")
+        if not selected:
+            raise Fatal("No lookups matched the book filter.")
 
     if args.reset:
         if not args.apply:

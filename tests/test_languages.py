@@ -190,6 +190,14 @@ def test_gate_defaults_to_english(tmp_path):
     assert [lk.stem for lk in read_lookups(db)] == ["bank"]
 
 
+def test_none_gate_reads_every_language(tmp_path):
+    # --force-lang path: no WORDS.lang filter, so both langs come through.
+    db = tmp_path / "vocab.db"
+    _make_db(db)
+    stems = sorted(lk.stem for lk in read_lookups(db, None))
+    assert stems == ["bank", "manger"]
+
+
 # --- prompt parametrization ----------------------------------------------
 
 
