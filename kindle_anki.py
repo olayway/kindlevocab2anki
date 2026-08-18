@@ -904,14 +904,25 @@ def card_templates(layout: str) -> tuple[str, str]:
     return LAYOUTS.get(layout, LAYOUTS[DEFAULT_LAYOUT])
 
 
-def ensure_model(layout: str = DEFAULT_LAYOUT) -> None:
-    # Only ever create the note type; never touch it once it exists. The
-    # templates belong to the user after that — this leaves hand-edits in Anki's
-    # card editor alone, and means switching --layout only affects a deck built
-    # from scratch (change it in Anki, or --reset, to re-layout an existing one).
-    if MODEL_NAME in anki("modelNames"):
-        return
+def ensure_model(layout: str = DEFAULT_LAYOUT, *, relayout: bool = False) -> None:
+    # Create the note type if absent. If it exists, leave it alone — the
+    # templates belong to the user after that, so hand-edits in Anki's card
+    # editor survive — UNLESS relayout is set, which means an explicit --layout
+    # asked for those templates: re-push them (and the CSS) onto the existing
+    # note type so every card re-renders in the new layout, no reprocessing.
     front, back = card_templates(layout)
+    if MODEL_NAME in anki("modelNames"):
+        if relayout:
+            anki(
+                "updateModelTemplates",
+                model={
+                    "name": MODEL_NAME,
+                    "templates": {"Production": {"Front": front, "Back": back}},
+                },
+            )
+            anki("updateModelStyling", model={"name": MODEL_NAME, "css": CARD_CSS})
+            print(f"Re-applied {layout!r} layout to note type {MODEL_NAME!r}")
+        return
     anki(
         "createModel",
         modelName=MODEL_NAME,
@@ -1492,6 +1503,10 @@ def main(argv: list[str]) -> int:
     deck_name = deck_name_for(learning)
     language = resolve_language(args.language)
     layout = resolve_layout(args.layout)
+    # An explicit --layout on the CLI is a request to (re-)apply that layout to
+    # the note type, overwriting hand-edits; CARD_LAYOUT/.env or the default are
+    # not, so an existing note type's templates are left untouched.
+    relayout = args.layout is not None
     if layout == "translation" and not language:
         raise Fatal(
             "--layout translation puts the native translation on the front, so "
@@ -1543,6 +1558,14 @@ def main(argv: list[str]) -> int:
                 anki("deleteNotes", notes=ids)
             save_skipped({})
             print(f"--reset: deleted {len(ids)} note(s), cleared skipped.json")
+
+    # An explicit --layout restyles the note type up front, before the
+    # empty-work early-exits below, so `--layout X --apply` re-lays-out an
+    # existing online deck even when there are no new lookups to import. Offline
+    # decks always rebuild the model on export, so this only applies online.
+    if relayout and args.apply and not offline:
+        ensure_model(layout, relayout=True)
+        ensure_deck(deck_name)
 
     wiped = args.reset and args.apply
     skipped = {} if wiped else load_skipped()

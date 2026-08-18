@@ -48,3 +48,44 @@ def test_genanki_model_carries_selected_layout():
     pytest.importorskip("genanki")
     model = kindle_anki.build_genanki_model("translation")
     assert "{{Translation}}" in model.templates[0]["qfmt"]
+
+
+def _capture_anki(monkeypatch, model_exists):
+    """Stub kindle_anki.anki, recording every call; report the model present."""
+    calls = []
+
+    def fake_anki(action, **params):
+        calls.append((action, params))
+        if action == "modelNames":
+            return [kindle_anki.MODEL_NAME] if model_exists else []
+        return None
+
+    monkeypatch.setattr(kindle_anki, "anki", fake_anki)
+    return calls
+
+
+def test_ensure_model_relayout_repushes_templates_and_css(monkeypatch):
+    calls = _capture_anki(monkeypatch, model_exists=True)
+    kindle_anki.ensure_model("translation", relayout=True)
+    actions = {action for action, _ in calls}
+    assert {"updateModelTemplates", "updateModelStyling"} <= actions
+    tmpl = next(p for a, p in calls if a == "updateModelTemplates")
+    front = tmpl["model"]["templates"]["Production"]["Front"]
+    assert "{{Translation}}" in front and "{{Definition}}" not in front
+
+
+def test_ensure_model_leaves_existing_alone_without_relayout(monkeypatch):
+    calls = _capture_anki(monkeypatch, model_exists=True)
+    kindle_anki.ensure_model("translation")
+    actions = {action for action, _ in calls}
+    assert "updateModelTemplates" not in actions
+    assert "updateModelStyling" not in actions
+    assert "createModel" not in actions
+
+
+def test_ensure_model_creates_when_absent_even_with_relayout(monkeypatch):
+    calls = _capture_anki(monkeypatch, model_exists=False)
+    kindle_anki.ensure_model("translation", relayout=True)
+    actions = {action for action, _ in calls}
+    assert "createModel" in actions
+    assert "updateModelTemplates" not in actions
