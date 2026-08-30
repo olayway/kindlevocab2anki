@@ -175,8 +175,11 @@ def test_prompt_carries_focus_target_and_level():
     assert "B1" in prompt and "Polish" in prompt
 
 
-def test_schema_requires_exactly_the_pair_count():
+def test_schema_pair_shape_and_no_unsupported_bounds():
+    # The structured-output format rejects array minItems/maxItems > 1, so the
+    # count lives in the prompt, not the schema. The pair shape is still pinned.
     arr = production_array_schema()
-    assert arr["minItems"] == PRODUCTION_PAIRS and arr["maxItems"] == PRODUCTION_PAIRS
+    assert "minItems" not in arr and "maxItems" not in arr
+    assert arr["items"]["required"] == ["native", "target"]
     card = backfill_production_schema()["properties"]["cards"]["items"]
     assert card["required"] == ["id", "production"]

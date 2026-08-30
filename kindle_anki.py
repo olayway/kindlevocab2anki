@@ -1624,12 +1624,16 @@ def production_pair_rules(learning: LanguageProfile, language: str, level: str) 
 
 
 def production_array_schema() -> dict:
-    """Schema for a `production` value: exactly PRODUCTION_PAIRS native/target
-    pairs. Shared by the clustering and backfill schemas."""
+    """Schema for a `production` value: a list of native/target pairs. Shared by
+    the clustering and backfill schemas.
+
+    The count (exactly PRODUCTION_PAIRS) is asked for in the prompt, not pinned
+    here: the structured-output format rejects array `minItems`/`maxItems` other
+    than 0 or 1. Both consumers pad/truncate to PRODUCTION_PAIRS anyway, so a
+    short or long list is tolerated rather than fatal.
+    """
     return {
         "type": "array",
-        "minItems": PRODUCTION_PAIRS,
-        "maxItems": PRODUCTION_PAIRS,
         "items": {
             "type": "object",
             "properties": {

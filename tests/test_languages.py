@@ -321,14 +321,15 @@ def test_schema_with_translation_requires_translation():
     assert "production" not in card["properties"]
 
 
-def test_schema_with_production_requires_fixed_length_pairs():
+def test_schema_with_production_requires_pair_array():
     card = cluster_schema(with_production=True)["properties"]["groups"]["items"][
         "properties"
     ]["new_cards"]["items"]
     prod = card["properties"]["production"]
     assert "production" in card["required"]
-    assert prod["minItems"] == PRODUCTION_PAIRS
-    assert prod["maxItems"] == PRODUCTION_PAIRS
+    # The pair count is enforced in the prompt, not the schema: the structured-
+    # output format rejects array minItems/maxItems > 1.
+    assert "minItems" not in prod and "maxItems" not in prod
     assert prod["items"]["required"] == ["native", "target"]
     assert prod["items"]["additionalProperties"] is False
 
