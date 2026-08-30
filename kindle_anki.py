@@ -69,6 +69,8 @@ FIELDS = [
     "ProdTarget3",
 ]
 PRODUCTION_PAIRS = 3  # native/target sentence pairs per production card
+PRODUCTION_SUBDECK = "Production"  # production cards live in "{deck}::Production"
+PROMOTE_MATURE_DAYS = 21  # a "mature" recognition card's minimum interval (days)
 BLANK = "_____"
 # Back-of-card replacement: wrap the answer (in its original inflected form) so
 # the eye lands on it inside the full sentence. `\g<0>` re-inserts the match.
@@ -1226,6 +1228,108 @@ def backfill_full_sentences(
 
 
 # --------------------------------------------------------------------------
+# production-card lifecycle — born suspended, promoted with their sibling
+# --------------------------------------------------------------------------
+
+
+def threshold_met(recognition: dict, threshold: str) -> bool:
+    """Has a recognition card reached `threshold`? Reads Anki card stats:
+    `type` (0 new, 1 learning, 2 review, 3 relearning), `reps`, `interval`.
+
+    - seen:      reviewed at least once
+    - graduated: left learning for the review queue (default)
+    - mature:    in review with an interval past the maturity cutoff
+    """
+    if threshold == "seen":
+        return recognition["reps"] >= 1
+    if threshold == "graduated":
+        return recognition["type"] == 2
+    if threshold == "mature":
+        return recognition["type"] == 2 and recognition["interval"] >= PROMOTE_MATURE_DAYS
+    raise Fatal(f"Unknown promote-after threshold {threshold!r}.")
+
+
+def plan_production_reconcile(
+    pairs: list[tuple[dict, dict]], threshold: str
+) -> tuple[list[int], list[int]]:
+    """Pure decision core: given (recognition, production) card-stat pairs,
+    return (to_suspend, to_unsuspend) production card ids.
+
+    A production card is born suspended and unsuspended once its recognition
+    sibling reaches `threshold`. Only queue state is corrected, so re-running is
+    idempotent (a card already in its target state is left alone).
+
+    SAFETY RULE: a production card with `reps > 0` has been studied — never
+    suspend or unsuspend it, whatever the sibling's state. We don't clobber work
+    the user has already started.
+    """
+    to_suspend: list[int] = []
+    to_unsuspend: list[int] = []
+    for recognition, production in pairs:
+        if production["reps"] > 0:
+            continue
+        met = threshold_met(recognition, threshold)
+        suspended = production["queue"] == -1
+        if met and suspended:
+            to_unsuspend.append(production["id"])
+        elif not met and not suspended:
+            to_suspend.append(production["id"])
+    return to_suspend, to_unsuspend
+
+
+def reconcile_production(deck_name: str, threshold: str) -> None:
+    """Live-mode sweep folded into a --production --apply run: move production
+    cards into the "{deck}::Production" subdeck, and suspend/promote them to
+    track their recognition sibling. Idempotent; safe to run every time.
+
+    Pairs the two cards of each note by template ordinal (0 recognition,
+    1 production). `deck:` matches subdecks too, so one query sees both.
+    """
+    subdeck = f"{deck_name}::{PRODUCTION_SUBDECK}"
+    if subdeck not in anki("deckNames"):
+        anki("createDeck", deck=subdeck)
+
+    card_ids = anki("findCards", query=f'deck:"{deck_name}" "note:{MODEL_NAME}"')
+    if not card_ids:
+        return
+    by_note: dict[int, dict[int, dict]] = {}
+    for card in anki("cardsInfo", cards=card_ids):
+        by_note.setdefault(card["note"], {})[card["ord"]] = card
+
+    pairs: list[tuple[dict, dict]] = []
+    to_move: list[int] = []
+    for cards in by_note.values():
+        recognition = cards.get(0)
+        production = cards.get(1)
+        if recognition is None or production is None:
+            continue  # empty-card-gated note: no production card to reconcile
+        if production.get("deckName") != subdeck:
+            to_move.append(production["cardId"])
+        pairs.append(
+            (recognition, {"id": production["cardId"], **production})
+        )
+
+    if to_move:
+        anki("changeDeck", cards=to_move, deck=subdeck)
+
+    to_suspend, to_unsuspend = plan_production_reconcile(pairs, threshold)
+    if to_suspend:
+        anki("suspend", cards=to_suspend)
+    if to_unsuspend:
+        anki("unsuspend", cards=to_unsuspend)
+
+    parts = []
+    if to_move:
+        parts.append(f"moved {len(to_move)} into {subdeck!r}")
+    if to_unsuspend:
+        parts.append(f"promoted {len(to_unsuspend)}")
+    if to_suspend:
+        parts.append(f"suspended {len(to_suspend)}")
+    if parts:
+        print("Production cards: " + ", ".join(parts))
+
+
+# --------------------------------------------------------------------------
 # sinks — where apply_new_cards sends its two side effects
 # --------------------------------------------------------------------------
 
@@ -1991,6 +2095,10 @@ def main(argv: list[str]) -> int:
 
     if not new_lookups:
         print("\nNothing to do.")
+        # Even with no new lookups, promote any production cards whose sibling
+        # graduated since the last run (live mode only; idempotent).
+        if args.production and not offline:
+            reconcile_production(deck_name, args.promote_after)
         return 0
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -2006,6 +2114,12 @@ def main(argv: list[str]) -> int:
 
     if offline:
         sink: Sink = ApkgSink(export_path, state, deck_name, layout)
+        if args.production:
+            print(
+                "Note: offline export builds production cards but can't suspend "
+                "or promote them — run a live --production --apply to reconcile "
+                "their lifecycle once imported."
+            )
     else:
         ensure_model(layout)
         ensure_deck(deck_name)
@@ -2037,6 +2151,13 @@ def main(argv: list[str]) -> int:
         sink=sink,
     )
     save_skipped(skipped)
+
+    # Fold the production-card sweep into the run: newly created production cards
+    # are moved to the subdeck and born suspended, and any whose recognition
+    # sibling has since graduated are promoted. Live mode only — offline .apkg
+    # can't suspend/move cards (accepted).
+    if args.production and not offline:
+        reconcile_production(deck_name, args.promote_after)
 
     if offline:
         print(
