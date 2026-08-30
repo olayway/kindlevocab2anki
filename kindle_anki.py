@@ -1009,6 +1009,50 @@ def ensure_deck(deck_name: str) -> None:
         print(f"Created deck {deck_name!r}")
 
 
+def backfill_full_sentences(
+    deck_name: str, lookups: list[Lookup], learning: LanguageProfile
+) -> None:
+    """Populate SentenceFull on cards created before that field existed.
+
+    Those cards store only the blanked Sentence, so the original is re-read
+    from vocab.db via each card's primary Lookups id and re-highlighted. The
+    exact span Claude blanked isn't recorded, so the highlighter falls back to
+    the word/stem — enough for the common single-word case; anything it can't
+    place still shows the full sentence, just unbolded. Idempotent: only notes
+    whose SentenceFull is empty are queried and touched.
+    """
+    empty = anki("findNotes", query=f'deck:"{deck_name}" "note:{MODEL_NAME}" SentenceFull:')
+    if not empty:
+        return
+    by_id = {lk.id: lk for lk in lookups}
+    filled = missing = 0
+    for note in anki("notesInfo", notes=empty):
+        fields = note["fields"]
+        primary = fields.get("Lookups", {}).get("value", "").split(",")[0].strip()
+        lk = by_id.get(primary)
+        if lk is None or not lk.sentence:
+            missing += 1  # source lookup gone from vocab.db — leave it empty
+            continue
+        full = highlight(
+            lk.sentence,
+            "",
+            lk.word,
+            lk.stem,
+            learning.boundaries,
+            learning.ignore_case,
+            learning.inflection,
+        )
+        anki(
+            "updateNoteFields",
+            note={"id": note["noteId"], "fields": {"SentenceFull": full}},
+        )
+        filled += 1
+    msg = f"Backfilled SentenceFull on {filled} existing card(s)"
+    if missing:
+        msg += f"; {missing} left empty (source lookup no longer in vocab.db)"
+    print(msg)
+
+
 # --------------------------------------------------------------------------
 # sinks — where apply_new_cards sends its two side effects
 # --------------------------------------------------------------------------
@@ -1625,13 +1669,14 @@ def main(argv: list[str]) -> int:
             save_skipped({})
             print(f"--reset: deleted {len(ids)} note(s), cleared skipped.json")
 
-    # An explicit --layout restyles the note type up front, before the
-    # empty-work early-exits below, so `--layout X --apply` re-lays-out an
-    # existing online deck even when there are no new lookups to import. Offline
-    # decks always rebuild the model on export, so this only applies online.
-    if relayout and args.apply and not offline:
-        ensure_model(layout, relayout=True)
+    # Reconcile the online note type up front, before the empty-work early-exits
+    # below, so a plain `--apply` (even with no new lookups) still adds any
+    # missing field, applies an explicit --layout, and backfills SentenceFull on
+    # pre-existing cards. Offline decks rebuild the model on export instead.
+    if args.apply and not offline:
+        ensure_model(layout, relayout=relayout)
         ensure_deck(deck_name)
+        backfill_full_sentences(deck_name, lookups, learning)
 
     wiped = args.reset and args.apply
     skipped = {} if wiped else load_skipped()
