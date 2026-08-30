@@ -33,6 +33,14 @@ SAMPLES: list[dict[str, str]] = [
         "cherry blossoms drew crowds each spring.",
         "Source": "The Remains of the Day",
         "LookupDate": "2026-08-14",
+        # Production pairs (native Polish → target English), focus/target bolded
+        # exactly as Claude emits them. One pair is shown per calendar day.
+        "ProdNative1": 'Piękno kwiatów wiśni jest <b class="focus">ulotne</b>.',
+        "ProdTarget1": 'The beauty of cherry blossoms is <b class="target">ephemeral</b>.',
+        "ProdNative2": 'Sława bywa <b class="focus">ulotna</b>.',
+        "ProdTarget2": 'Fame can be <b class="target">ephemeral</b>.',
+        "ProdNative3": 'To była tylko <b class="focus">ulotna</b> chwila.',
+        "ProdTarget3": 'It was only an <b class="target">ephemeral</b> moment.',
     },
     {
         "Word": "gregarious",
@@ -42,6 +50,10 @@ SAMPLES: list[dict[str, str]] = [
         "SentenceFull": "",
         "Source": "A Little Life",
         "LookupDate": "2026-08-10",
+        # Only one pair here -> the production card still works; the rotation
+        # script just always lands on it.
+        "ProdNative1": 'Mój brat jest bardzo <b class="focus">towarzyski</b>.',
+        "ProdTarget1": 'My brother is very <b class="target">gregarious</b>.',
     },
     {
         "Word": "petrichor",
@@ -65,14 +77,20 @@ def render_mustache(template: str, fields: dict[str, str], front_rendered: str =
     """
     out = template.replace("{{FrontSide}}", front_rendered)
 
-    # Conditional sections (non-nested, which is all these templates use).
+    # Conditional sections. The production template nests sections (each pair's
+    # {{#ProdNativeN}} sits inside the card-wide {{#ProdNative1}} gate), so a
+    # single pass would leave the inner ones intact — re-run until stable.
     def section(match: re.Match) -> str:
         kind, name, body = match.group(1), match.group(2), match.group(3)
         present = bool(fields.get(name, "").strip())
         show = present if kind == "#" else not present
         return body if show else ""
 
-    out = re.sub(r"\{\{([#^])(\w+)\}\}(.*?)\{\{/\2\}\}", section, out, flags=re.DOTALL)
+    while True:
+        new = re.sub(r"\{\{([#^])(\w+)\}\}(.*?)\{\{/\2\}\}", section, out, flags=re.DOTALL)
+        if new == out:
+            break
+        out = new
 
     # Plain field substitutions (leave HTML in field values as-is, like Anki).
     out = re.sub(r"\{\{(\w+)\}\}", lambda m: fields.get(m.group(1), ""), out)
@@ -127,20 +145,39 @@ body.dark .anki-frame { box-shadow: 0 1px 3px rgba(0,0,0,0.4); }
 """
 
 
+def _card_row(fields: dict[str, str], front: str, back: str) -> list[str]:
+    row = ['<div class="row">']
+    for label, body in (("Front", front), ("Back", back)):
+        row.append(
+            f'<div class="card-wrap"><p class="side-label">{label}'
+            f' — {html.escape(fields["Word"])}</p>'
+            f'<div class="anki-frame"><div class="card">{body}</div></div></div>'
+        )
+    row.append("</div>")
+    return row
+
+
 def build_html() -> str:
     parts: list[str] = []
     for layout_name, (front_tpl, back_tpl) in ka.LAYOUTS.items():
-        parts.append(f"<h2>Layout: {html.escape(layout_name)}</h2>")
+        parts.append(f"<h2>Recognition — {html.escape(layout_name)} layout</h2>")
         for fields in SAMPLES:
             front, back = render_card(front_tpl, back_tpl, fields)
-            parts.append('<div class="row">')
-            for label, body in (("Front", front), ("Back", back)):
-                parts.append(
-                    f'<div class="card-wrap"><p class="side-label">{label}'
-                    f' — {html.escape(fields["Word"])}</p>'
-                    f'<div class="anki-frame"><div class="card">{body}</div></div></div>'
-                )
-            parts.append("</div>")
+            parts.extend(_card_row(fields, front, back))
+
+    # The production card is layout-independent (always native → target) and only
+    # exists for notes that carry pairs, so we skip samples with no ProdNative1 —
+    # the same empty-card gate Anki applies via {{#ProdNative1}}.
+    parts.append("<h2>Production — native → target</h2>")
+    parts.append(
+        '<p class="sub">One pair is shown per calendar day (rotated by an inline '
+        "script); notes without production data render no card.</p>"
+    )
+    for fields in SAMPLES:
+        if not fields.get("ProdNative1", "").strip():
+            continue
+        front, back = render_card(ka.PRODUCTION_FRONT, ka.PRODUCTION_BACK, fields)
+        parts.extend(_card_row(fields, front, back))
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
@@ -160,7 +197,7 @@ function toggleDark() {{
 }}
 </script>
 <h1>Anki card preview</h1>
-<p class="sub">Rendered from CARD_CSS + LAYOUTS in kindle_anki.py. Edit those, re-run, refresh.</p>
+<p class="sub">Rendered from CARD_CSS, LAYOUTS, and the production template in kindle_anki.py. Edit those, re-run, refresh.</p>
 {''.join(parts)}
 </body></html>
 """
