@@ -87,6 +87,82 @@ def test_translate_true_adds_translation_field():
     assert result.notes[0]["fields"]["Translation"] == "trapić"
 
 
+def test_production_true_fills_pair_fields():
+    lookups = [mklookup("L1", stem="afflict", sentence="Diseases that afflict us.")]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {
+                "headword": "afflict",
+                "definition": "to cause suffering to",
+                "span": "afflict",
+                "production": [
+                    {"native": 'Choroby, które nas <b class="focus">trapią</b>.',
+                     "target": 'Diseases that <b class="target">afflict</b> us.'},
+                    {"native": 'Bieda <b class="focus">trapiła</b> wioskę.',
+                     "target": 'Poverty <b class="target">afflicted</b> the village.'},
+                    {"native": 'Wątpliwości go <b class="focus">trapią</b>.',
+                     "target": 'Doubts <b class="target">afflict</b> him.'},
+                ],
+            }
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response, DECK, EN, production=True)
+
+    fields = result.notes[0]["fields"]
+    assert fields["ProdNative1"] == 'Choroby, które nas <b class="focus">trapią</b>.'
+    assert fields["ProdTarget1"] == 'Diseases that <b class="target">afflict</b> us.'
+    assert fields["ProdNative2"] == 'Bieda <b class="focus">trapiła</b> wioskę.'
+    assert fields["ProdTarget3"] == 'Doubts <b class="target">afflict</b> him.'
+
+
+def test_production_false_omits_pair_fields():
+    lookups = [mklookup("L1", stem="afflict", sentence="Diseases that afflict us.")]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {"headword": "afflict", "definition": "to cause suffering to", "span": "afflict"}
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response, DECK, EN)  # production defaults False
+
+    assert not any(k.startswith("Prod") for k in result.notes[0]["fields"])
+
+
+def test_production_tolerates_short_or_missing_list():
+    # A malformed response (fewer than PRODUCTION_PAIRS pairs) must not crash the
+    # batch; the missing slots fall back to empty strings.
+    lookups = [mklookup("L1", stem="afflict", sentence="Diseases that afflict us.")]
+    response = {
+        "stem": "afflict",
+        "new_cards": [
+            {
+                "headword": "afflict",
+                "definition": "to cause suffering to",
+                "span": "afflict",
+                "production": [{"native": "one", "target": "uno"}],  # only 1 pair
+            }
+        ],
+        "assignments": [
+            {"lookup_id": "L1", "verdict": "new", "card_index": 0, "reason": ""}
+        ],
+    }
+
+    result = build_notes("afflict", lookups, response, DECK, EN, production=True)
+
+    fields = result.notes[0]["fields"]
+    assert fields["ProdNative1"] == "one" and fields["ProdTarget1"] == "uno"
+    assert fields["ProdNative2"] == "" and fields["ProdTarget3"] == ""
+
+
 def test_shared_card_joins_ids_and_primary_is_earliest():
     # L1 is listed first but L2 is older -> L2 is the primary (source/date/
     # sentence), yet both ids are recorded in Lookups in assignment order.

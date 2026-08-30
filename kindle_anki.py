@@ -517,6 +517,7 @@ def build_notes(
     deck_name: str,
     learning: LanguageProfile,
     translate: bool = False,
+    production: bool = False,
 ) -> BuildResult:
     """Turn Claude's per-group response into note payloads + outcomes.
 
@@ -581,6 +582,15 @@ def build_notes(
         }
         if translate:
             fields[TRANSLATION_FIELD] = card.get("translation", "")
+        if production:
+            # Claude emits the bold markup (<b class="focus">/<b class="target">)
+            # directly, so the pairs drop straight into the fields. Tolerate a
+            # short list rather than crash a batch on a malformed response.
+            pairs = card.get("production", [])
+            for n in range(1, PRODUCTION_PAIRS + 1):
+                pair = pairs[n - 1] if n - 1 < len(pairs) else {}
+                fields[f"ProdNative{n}"] = pair.get("native", "")
+                fields[f"ProdTarget{n}"] = pair.get("target", "")
         notes.append(
             {
                 "deckName": deck_name,
@@ -687,6 +697,7 @@ def apply_new_cards(
     deck_name: str,
     batch_size: int = 40,
     language: str | None = None,
+    level: str | None = None,
     sink: "Sink | None" = None,
 ) -> tuple[int, int, int]:
     """Cluster new lookups in batches and write the outcomes through `sink`.
@@ -715,7 +726,8 @@ def apply_new_cards(
         )
         with _Heartbeat(label):
             responses = cluster_groups(
-                client, model, payloads, learning=learning, language=language
+                client, model, payloads, learning=learning,
+                language=language, level=level,
             )
 
         for stem, lks in batch:
@@ -730,6 +742,7 @@ def apply_new_cards(
                 deck_name,
                 learning,
                 translate=bool(language),
+                production=bool(level),
             )
 
             if result.notes:
@@ -1341,19 +1354,40 @@ def resolve_level(cli_value: str | None, learning: LanguageProfile) -> str | Non
 
 
 def cluster_system_prompt(
-    learning: LanguageProfile, language: str | None = None
+    learning: LanguageProfile,
+    language: str | None = None,
+    level: str | None = None,
 ) -> str:
     """System prompt for the clustering call.
 
     `learning` is the language being studied — it sets the headword/definition
     rules and the language definitions are written in. A `translation` field is
     requested only when `language` (the native/back-of-card gloss) is given;
-    with no language the cards stay monolingual in the learning language.
+    with no language the cards stay monolingual in the learning language. When
+    `level` (a CEFR level) is given, each card also carries `production`
+    sentence pairs pinned to that level — only reached with --production, which
+    requires `language`, so the pairs' native side is always in `language`.
     """
     translation_bullet = (
         f"  - `translation`: a {language} translation of that same sense (shown "
         "only on the back, so it carries no guessing constraint).\n"
         if language
+        else ""
+    )
+    production_bullet = (
+        f"\n  - `production`: a list of exactly {PRODUCTION_PAIRS} sentence pairs "
+        "that drill actively PRODUCING this headword in context. Each pair has:\n"
+        f"    - `native`: a natural {language} sentence using this sense, with the "
+        f"one word or phrase that corresponds to the {learning.name} headword "
+        'wrapped in `<b class="focus">…</b>`. Every OTHER word must sit at CEFR '
+        f"{level} or below, so only the target concept is hard. Vary the "
+        f"{PRODUCTION_PAIRS} sentences in topic and structure.\n"
+        f"    - `target`: the full {learning.name} translation of that `native` "
+        'sentence, with the headword wrapped in `<b class="target">…</b>` (in '
+        f"whatever inflected form the sentence needs). Keep the rest near CEFR "
+        f"{level}.\n"
+        "    Emit the bold markup literally; do not escape the angle brackets."
+        if level
         else ""
     )
     return f"""\
@@ -1425,16 +1459,20 @@ card collapses several lookups, use the first mapped context's wording, not a \
 later context's inflection. Usually one piece (`["make off"]`). \
 For a separable phrasal verb split by its object, give each piece separately so \
 the object stays visible: "she tied her hair up" for the sense "tie up" → \
-`["tied", "up"]`.
+`["tied", "up"]`.{production_bullet}
 
 Echo each group's `stem`. Return exactly one result per input group and exactly \
 one assignment per input context.
 """
 
-def cluster_schema(with_translation: bool = False) -> dict:
+def cluster_schema(
+    with_translation: bool = False, with_production: bool = False
+) -> dict:
     """Structured-output schema for the clustering call.
 
-    Each new card requires a `translation` field only when translating.
+    Each new card requires a `translation` field only when translating, and a
+    `production` array (exactly PRODUCTION_PAIRS native/target pairs) only when
+    building production cards.
     """
     card_props = {
         "headword": {"type": "string"},
@@ -1445,6 +1483,22 @@ def cluster_schema(with_translation: bool = False) -> dict:
     if with_translation:
         card_props["translation"] = {"type": "string"}
         card_required.append("translation")
+    if with_production:
+        card_props["production"] = {
+            "type": "array",
+            "minItems": PRODUCTION_PAIRS,
+            "maxItems": PRODUCTION_PAIRS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "native": {"type": "string"},
+                    "target": {"type": "string"},
+                },
+                "required": ["native", "target"],
+                "additionalProperties": False,
+            },
+        }
+        card_required.append("production")
     return {
         "type": "object",
         "properties": {
@@ -1503,14 +1557,19 @@ def cluster_groups(
     learning: LanguageProfile,
     effort: str | None = None,
     language: str | None = None,
+    level: str | None = None,
 ):
     """Send stem-groups to Claude; return {stem: {stem, new_cards, assignments}}.
 
     `effort` is omitted unless given — cheap models reject the parameter.
     `learning` is the language being studied (sets the headword/definition
     rules). `language`, when set, asks for a translation field in that language.
+    `level` (a CEFR level), when set, asks for production sentence pairs pinned
+    to it — the --production path, which always supplies `language` too.
     """
-    schema = cluster_schema(with_translation=bool(language))
+    schema = cluster_schema(
+        with_translation=bool(language), with_production=bool(level)
+    )
     output_config = {"format": {"type": "json_schema", "schema": schema}}
     if effort:
         output_config["effort"] = effort
@@ -1520,7 +1579,7 @@ def cluster_groups(
         system=[
             {
                 "type": "text",
-                "text": cluster_system_prompt(learning, language),
+                "text": cluster_system_prompt(learning, language, level),
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -1807,7 +1866,12 @@ def main(argv: list[str]) -> int:
         sink = LiveSink()
     client = anthropic.Anthropic()
 
-    lang_note = f" (with {language} translations)" if language else ""
+    extras = []
+    if language:
+        extras.append(f"{language} translations")
+    if level:
+        extras.append(f"{level} production pairs")
+    lang_note = f" (with {' and '.join(extras)})" if extras else ""
     print(
         f"\nWriting {len(new_lookups)} {learning.name} card(s) with Claude"
         f"{lang_note}. Each card is generated by {args.model}; this can take a "
@@ -1823,6 +1887,7 @@ def main(argv: list[str]) -> int:
         deck_name,
         batch_size=args.batch_size,
         language=language,
+        level=level,
         sink=sink,
     )
     save_skipped(skipped)

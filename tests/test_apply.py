@@ -59,7 +59,7 @@ def test_writes_new_records_existing_and_collects_junk(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_cluster(client, model, payloads, learning=None, language=None):
+    def fake_cluster(client, model, payloads, learning=None, language=None, level=None):
         assert [p["stem"] for p in payloads] == ["bank", "winston", "make"]
         assert language is None  # no --translation -> monolingual
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
@@ -115,7 +115,7 @@ def test_language_is_threaded_and_translation_written(tmp_path, monkeypatch):
     }
     calls = []
 
-    def fake_cluster(client, model, payloads, learning=None, language=None):
+    def fake_cluster(client, model, payloads, learning=None, language=None, level=None):
         assert language == "French"  # --translation French threaded through
         return {p["stem"].lower(): canned[p["stem"].lower()] for p in payloads}
 
@@ -163,7 +163,7 @@ def test_progress_reports_progress_in_plain_language(tmp_path, monkeypatch, caps
 
     lks = {"bank": "L1", "make": "L2", "run": "L3"}
 
-    def fake_cluster(client, model, payloads, learning=None, language=None):
+    def fake_cluster(client, model, payloads, learning=None, language=None, level=None):
         return {p["stem"].lower(): canned(p["stem"].lower()) for p in payloads}
 
     monkeypatch.setattr(kindle_anki, "cluster_groups", fake_cluster)

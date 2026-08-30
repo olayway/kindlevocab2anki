@@ -14,7 +14,9 @@ import pytest
 
 import kindle_anki
 from kindle_anki import (
+    PRODUCTION_PAIRS,
     Fatal,
+    cluster_schema,
     cluster_system_prompt,
     load_languages,
     read_lookups,
@@ -279,6 +281,56 @@ def test_translation_axis_is_independent_of_learning():
     prompt = cluster_system_prompt(LANGS["fr"], language="Polish")
     assert "a Polish translation" in prompt
     assert "Monolingual French" in prompt
+
+
+def test_no_production_bullet_without_level():
+    prompt = cluster_system_prompt(LANGS["fr"], language="Polish")
+    assert "production" not in prompt
+    assert "class=\"focus\"" not in prompt
+
+
+def test_production_bullet_appears_with_level():
+    # Learning French, native Polish, level B1: ask for production pairs whose
+    # native side is Polish and whose non-target words sit at B1.
+    prompt = cluster_system_prompt(LANGS["fr"], language="Polish", level="B1")
+    assert "`production`" in prompt
+    assert f"exactly {PRODUCTION_PAIRS} sentence pairs" in prompt
+    assert "a natural Polish sentence" in prompt
+    assert 'class="focus"' in prompt  # native side markup
+    assert 'class="target"' in prompt  # target side markup
+    assert "CEFR B1" in prompt
+
+
+# --- cluster_schema: fields requested per run ----------------------------
+
+
+def test_schema_base_has_no_translation_or_production():
+    card = cluster_schema()["properties"]["groups"]["items"]["properties"][
+        "new_cards"
+    ]["items"]
+    assert "translation" not in card["properties"]
+    assert "production" not in card["properties"]
+
+
+def test_schema_with_translation_requires_translation():
+    card = cluster_schema(with_translation=True)["properties"]["groups"]["items"][
+        "properties"
+    ]["new_cards"]["items"]
+    assert "translation" in card["properties"]
+    assert "translation" in card["required"]
+    assert "production" not in card["properties"]
+
+
+def test_schema_with_production_requires_fixed_length_pairs():
+    card = cluster_schema(with_production=True)["properties"]["groups"]["items"][
+        "properties"
+    ]["new_cards"]["items"]
+    prod = card["properties"]["production"]
+    assert "production" in card["required"]
+    assert prod["minItems"] == PRODUCTION_PAIRS
+    assert prod["maxItems"] == PRODUCTION_PAIRS
+    assert prod["items"]["required"] == ["native", "target"]
+    assert prod["items"]["additionalProperties"] is False
 
 
 def test_main_learning_flag_selects_lookups(tmp_path, monkeypatch, capsys):
