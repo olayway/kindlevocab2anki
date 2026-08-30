@@ -69,6 +69,10 @@ FIELDS = [
     "ProdTarget3",
 ]
 PRODUCTION_PAIRS = 3  # native/target sentence pairs per production card
+# Backfill emits PRODUCTION_PAIRS pairs (6 sentences) per card, several times
+# the volume of a clustering result, so it batches smaller to stay under the
+# response token cap.
+PRODUCTION_BACKFILL_BATCH = 15
 PRODUCTION_SUBDECK = "Production"  # production cards live in "{deck}::Production"
 PROMOTE_MATURE_DAYS = 21  # a "mature" recognition card's minimum interval (days)
 BLANK = "_____"
@@ -1846,7 +1850,9 @@ def cluster_groups(
         output_config["effort"] = effort
     response = client.messages.create(
         model=model,
-        max_tokens=16000,
+        # Production pairs add ~6 sentences per card, several times a plain
+        # result's size, so give the batch more room when they're requested.
+        max_tokens=32000 if level else 16000,
         system=[
             {
                 "type": "text",
@@ -1942,7 +1948,7 @@ def generate_production_pairs(
         output_config["effort"] = effort
     response = client.messages.create(
         model=model,
-        max_tokens=16000,
+        max_tokens=32000,  # every card yields PRODUCTION_PAIRS pairs (6 sentences)
         system=[
             {
                 "type": "text",
@@ -2359,7 +2365,9 @@ def main(argv: list[str]) -> int:
             language,
             level,
             limit=args.limit,
-            batch_size=args.batch_size,
+            # Backfill is heavier per card than clustering, so cap the batch —
+            # but honour an explicitly smaller --batch-size.
+            batch_size=min(args.batch_size, PRODUCTION_BACKFILL_BATCH),
         )
         reconcile_production(deck_name, args.promote_after)
 
