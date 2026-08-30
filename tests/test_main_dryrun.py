@@ -50,7 +50,7 @@ def test_dry_run_reads_reports_and_writes_nothing(tmp_path, monkeypatch, capsys)
 
     monkeypatch.setattr(kindle_anki, "anki", fake_anki)
 
-    rc = kindle_anki.main(["--db", str(db)])
+    rc = kindle_anki.main(["--db", str(db), "--learning", "en"])
 
     assert rc == 0
     out = capsys.readouterr().out

@@ -7,9 +7,9 @@
 
 Reads vocab.db from a mounted Kindle (or a local cache), generates a
 context-aware definition for each new word with the Claude API, and creates
-one Anki note per lemma via AnkiConnect. The learning language (English by
-default; --learning fr, etc.) gates which lookups are read and sets the
-language definitions are written in.
+one Anki note per lemma via AnkiConnect. The learning language (--learning en,
+--learning fr, etc.) gates which lookups are read and sets the language
+definitions are written in.
 
 Pass --export deck.apkg to write an offline Anki package instead of talking to
 a running Anki: state then lives in a local deck_state.json rather than the
@@ -101,7 +101,6 @@ BATCH_SIZE = 40
 # flags (see blank_out), and a morphology fragment spliced into the prompt.
 
 LANGUAGES_FILE = SCRIPT_DIR / "languages.yaml"
-DEFAULT_LEARNING_CODE = "en"
 
 
 @dataclass(frozen=True)
@@ -1636,16 +1635,14 @@ def resolve_layout(cli_value: str | None) -> str:
 
 
 def resolve_learning(
-    cli_value: str | None, languages: dict[str, LanguageProfile]
+    cli_value: str, languages: dict[str, LanguageProfile]
 ) -> LanguageProfile:
-    """The language being studied: CLI flag, else LEARNING_LANGUAGE in .env, else English.
+    """The language being studied, from the required --learning flag.
 
     Accepts a code ("fr") case-insensitively; raises Fatal on one not defined
-    in languages.yaml (including a removed default) — never a silent fallback.
+    in languages.yaml — never a silent fallback.
     """
-    code = (
-        cli_value or os.environ.get("LEARNING_LANGUAGE") or DEFAULT_LEARNING_CODE
-    ).strip().lower()
+    code = cli_value.strip().lower()
     if code not in languages:
         known = ", ".join(sorted(languages))
         raise Fatal(f"Unknown --learning {code!r}. Known languages: {known}.")
@@ -2195,9 +2192,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--learning",
         metavar="CODE",
-        help="language you're studying, e.g. 'fr' (default: en; falls back to "
-        "LEARNING_LANGUAGE in .env). Sets which lookups are read and how cards "
-        "are built. Defined in languages.yaml beside this script.",
+        required=True,
+        help="language you're studying, e.g. 'fr' (required). Sets which lookups "
+        "are read and how cards are built. Defined in languages.yaml beside "
+        "this script.",
     )
     parser.add_argument(
         "--translation",
@@ -2245,7 +2243,7 @@ def main(argv: list[str]) -> int:
     export_path = Path(args.export).expanduser() if args.export else None
     offline = export_path is not None
 
-    load_env()  # so --learning/--translation honour .env in dry runs too (setdefault)
+    load_env()  # so --translation honours .env in dry runs too (setdefault)
     languages = load_languages()
     learning = resolve_learning(args.learning, languages)
     deck_name = deck_name_for(learning)

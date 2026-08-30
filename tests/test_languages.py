@@ -29,43 +29,17 @@ from tests.conftest import LANGS
 # --- resolve_learning -----------------------------------------------------
 
 
-def test_defaults_to_english(monkeypatch):
-    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
-    assert resolve_learning(None, LANGS) is LANGS["en"]
-
-
-def test_cli_code_selects_profile(monkeypatch):
-    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
+def test_cli_code_selects_profile():
     assert resolve_learning("fr", LANGS) is LANGS["fr"]
 
 
-def test_code_is_case_insensitive(monkeypatch):
-    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
+def test_code_is_case_insensitive():
     assert resolve_learning("FR", LANGS) is LANGS["fr"]
 
 
-def test_env_fallback(monkeypatch):
-    monkeypatch.setenv("LEARNING_LANGUAGE", "de")
-    assert resolve_learning(None, LANGS) is LANGS["de"]
-
-
-def test_cli_overrides_env(monkeypatch):
-    monkeypatch.setenv("LEARNING_LANGUAGE", "de")
-    assert resolve_learning("ja", LANGS) is LANGS["ja"]
-
-
-def test_unknown_language_is_fatal(monkeypatch):
-    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
+def test_unknown_language_is_fatal():
     with pytest.raises(Fatal, match="Unknown --learning 'xx'"):
         resolve_learning("xx", LANGS)
-
-
-def test_default_missing_from_config_is_fatal(monkeypatch):
-    # No silent fallback: if the default code isn't in the file, say so.
-    monkeypatch.delenv("LEARNING_LANGUAGE", raising=False)
-    without_en = {k: v for k, v in LANGS.items() if k != "en"}
-    with pytest.raises(Fatal, match="Unknown --learning 'en'"):
-        resolve_learning(None, without_en)
 
 
 # --- resolve_level: the CEFR level for --production sentences --------------

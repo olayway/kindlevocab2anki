@@ -37,7 +37,7 @@ Once, in order:
 
 1. **Install uv** — `brew install uv`. Nothing else to install; the script declares its own dependencies.
 2. **Start Anki with AnkiConnect** — install add-on `2055492159` (Tools → Add-ons → Get Add-ons), restart Anki, leave it running. It's queried even on dry runs.
-3. **Add your API key** — create `.env` here with `ANTHROPIC_API_KEY=sk-ant-...`. Optionally add `TRANSLATION_LANGUAGE=Polish` and `LEARNING_LANGUAGE=fr` as defaults.
+3. **Add your API key** — create `.env` here with `ANTHROPIC_API_KEY=sk-ant-...`. Optionally add `TRANSLATION_LANGUAGE=Polish` as a default.
 4. **Connect the Kindle** by USB and confirm it mounts at `/Volumes/Kindle`. The first run caches `vocab.db` into this directory, so later runs work with the Kindle unplugged. (Or point `--db PATH` at a copy.)
 
 ## Quick start
@@ -85,7 +85,7 @@ uv run kindle_anki.py --export deck.apkg --apply
 | `--apply` | Cluster with Claude and write notes to Anki. |
 | `--limit N` | Process at most N new lookups this run. Use it to sample cost and quality. |
 | `--book SUB` | Only lookups from books whose title contains `SUB` (case-insensitive). Repeatable. |
-| `--learning CODE` | Language you're studying, e.g. `fr`. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages). |
+| `--learning CODE` | **Required.** Language you're studying, e.g. `fr`. See [Languages](#languages). |
 | `--translation NAME` | Add a native-language gloss on the back, e.g. `Polish`. Default off; falls back to `TRANSLATION_LANGUAGE`. |
 | `--layout NAME` | `definition` (default) prompts with the definition; `translation` prompts with the native word (requires `--translation`). See [Card layout](#card-layout). |
 | `--production` | Also build active-production cards. Requires `--translation` and `--level`. See [Production cards](#production-cards). |
@@ -104,7 +104,7 @@ uv run kindle_anki.py --export deck.apkg --apply
 
 Two independent axes control language:
 
-- **`--learning CODE`** — the language you're **studying**. Gates which Kindle lookups are read, sets the language definitions are written in, and picks the headword and blanking rules. Default `en`. Each learning language gets its own deck (`English::Kindle`, `French::Kindle`, …).
+- **`--learning CODE`** — the language you're **studying** (required). Gates which Kindle lookups are read, sets the language definitions are written in, and picks the headword and blanking rules. Each learning language gets its own deck (`English::Kindle`, `French::Kindle`, …).
 - **`--translation NAME`** — your **native** language, glossed on the **back** only. Optional, off by default.
 
 They compose freely: `--learning fr --translation Polish` makes French cards (French headword, definition, and blanked sentence) with a Polish gloss on the back. The gloss sits on the back so recall stays recall, not translation — on the front it would just be a second puzzle. Beginners can flip it with `--layout translation`.
@@ -283,7 +283,7 @@ The evals use `claude-haiku-4-5` and assert loose properties that survive model 
 | `languages.yaml` | learning-language profiles (name, blanking flags, morphology) |
 | `preview_cards.py` | render the card templates to `card_preview.html` |
 | `tests/` | pytest suite (`-m llm` for the API evals) |
-| `.env` | `ANTHROPIC_API_KEY` plus optional `TRANSLATION_LANGUAGE` / `LEARNING_LANGUAGE` (git-ignored, mode 600) |
+| `.env` | `ANTHROPIC_API_KEY` plus optional `TRANSLATION_LANGUAGE` (git-ignored, mode 600) |
 | `vocab.db` | cached copy of the Kindle database (git-ignored) |
 | `skipped.json` | junk lookup ids → reason (git-ignored) |
 | `deck_state.json` | offline deck state for `--export` (git-ignored) |
