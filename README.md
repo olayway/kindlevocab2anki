@@ -82,7 +82,7 @@ The three booleans replace what used to be a fixed `spaced`/`cjk` strategy, so y
 
 ## Card layout
 
-Every card holds the same fields; the **layout** only decides which one prompts you on the front and which is revealed on the back. Pick it with `--layout` (or `CARD_LAYOUT` in `.env`):
+Every card holds the same fields; the **layout** only decides which one prompts you on the front and which is revealed on the back. Pick it with `--layout`:
 
 - **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the word, plus the native translation if `--translation` is set. You recall the word from a meaning stated in the language itself.
 - **`translation`** — front: your **native** translation + the blanked sentence; back: the word and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--translation`** (it errors out otherwise).
@@ -92,7 +92,18 @@ Every card holds the same fields; the **layout** only decides which one prompts 
 uv run kindle_anki.py --learning fr --translation Polish --layout translation --apply
 ```
 
-Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on. The layout is applied **only when the `Kindle Vocab` note type is first created**; once it exists, the tool never rewrites its templates, so any tweaks you make in Anki's own card editor are left alone. To re-layout a deck that already exists, either change it in Anki (Browse → Cards…) or `--reset` and reimport. This applies to both paths: for an `.apkg`, Anki keeps the layout it already has for a note type on re-import.
+Both layouts use identical fields, notes, and CSS — switching is purely a matter of which side each gloss appears on.
+
+**Re-laying-out an existing deck.** An **explicit `--layout` on the command line** (with `--apply`) re-pushes that layout's templates and CSS onto the existing note type in place — so every card re-renders in the new layout, keeping all your cards, scheduling, and review history.
+
+```sh
+# switch an existing deck to the translation layout, cards and history intact
+uv run kindle_anki.py --translation Polish --layout translation --apply
+```
+
+**A normal run never touches your templates**, so hand-edits you make in Anki (Browse → Cards…) survive every import. Passing `--layout` is how you opt in to overwriting them with the built-in layout.
+
+For an **`.apkg`** (`--export`) the model is rebuilt on every export anyway, so just re-export with the new `--layout` and re-import; Anki updates the GUID-stable cards in place rather than duplicating them.
 
 ### Previewing the templates in a browser
 
@@ -154,7 +165,7 @@ The dry run is the default on purpose: it costs nothing on the Claude side and s
 | `--batch-size N`     | Stem-groups per API request (default 40).                                                                                                                                                                                                                                                                                           |
 | `--learning CODE`    | Language you're studying, e.g. `fr`. Sets which lookups are read and how cards are built. Default `en`; falls back to `LEARNING_LANGUAGE` in `.env`. See [Languages](#languages).                                                                                                                                                   |
 | `--translation NAME` | Add a back-of-card translation into your native language, e.g. `Polish`. Default: none (monolingual). Falls back to `TRANSLATION_LANGUAGE` in `.env`. Orthogonal to `--learning`.                                                                                                                                                   |
-| `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--translation`. Falls back to `CARD_LAYOUT` in `.env`. See [Card layout](#card-layout). |
+| `--layout NAME`      | Card layout: `definition` (default) prompts with the learning-language definition; `translation` prompts with your native translation on the front — for beginners who can't yet read a definition in the language. `translation` requires `--translation`. See [Card layout](#card-layout). |
 | `--export FILE.apkg` | Offline mode. Write cards to an Anki package file instead of a running Anki; state lives in `deck_state.json`. See [Offline export](#offline-export).                                                                                                                                                                               |
 
 ```sh

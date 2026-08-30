@@ -23,23 +23,15 @@ def test_unknown_layout_falls_back_to_default():
     assert card_templates("bogus") == kindle_anki.LAYOUTS[kindle_anki.DEFAULT_LAYOUT]
 
 
-def test_resolve_layout_cli_over_env(monkeypatch):
-    monkeypatch.setenv("CARD_LAYOUT", "definition")
+def test_resolve_layout_uses_cli_value():
     assert resolve_layout("translation") == "translation"
 
 
-def test_resolve_layout_falls_back_to_env(monkeypatch):
-    monkeypatch.setenv("CARD_LAYOUT", "translation")
-    assert resolve_layout(None) == "translation"
-
-
-def test_resolve_layout_default_when_unset(monkeypatch):
-    monkeypatch.delenv("CARD_LAYOUT", raising=False)
+def test_resolve_layout_default_when_unset():
     assert resolve_layout(None) == kindle_anki.DEFAULT_LAYOUT
 
 
-def test_resolve_layout_rejects_unknown(monkeypatch):
-    monkeypatch.delenv("CARD_LAYOUT", raising=False)
+def test_resolve_layout_rejects_unknown():
     with pytest.raises(Fatal):
         resolve_layout("beginner")
 

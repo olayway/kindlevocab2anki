@@ -1161,12 +1161,12 @@ def resolve_language(cli_value: str | None) -> str | None:
 
 
 def resolve_layout(cli_value: str | None) -> str:
-    """Card layout: CLI flag, else CARD_LAYOUT in .env, else the default.
+    """Card layout: the --layout flag, else the default.
 
     Raises Fatal on an unknown name so a typo fails fast rather than silently
     falling back to the default layout.
     """
-    value = (cli_value or os.environ.get("CARD_LAYOUT") or DEFAULT_LAYOUT).strip().lower()
+    value = (cli_value or DEFAULT_LAYOUT).strip().lower()
     if value not in LAYOUTS:
         known = ", ".join(sorted(LAYOUTS))
         raise Fatal(f"Unknown --layout {value!r}. Known layouts: {known}.")
@@ -1482,10 +1482,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--layout",
         choices=sorted(LAYOUTS),
-        help="card layout (default: definition; falls back to CARD_LAYOUT in "
-        ".env). 'definition' prompts with the learning-language definition; "
-        "'translation' prompts with your native translation on the front — for "
-        "beginners, and requires --translation.",
+        help="card layout (default: definition). 'definition' prompts with the "
+        "learning-language definition; 'translation' prompts with your native "
+        "translation on the front — for beginners, and requires --translation.",
     )
     parser.add_argument(
         "--export",
@@ -1504,8 +1503,8 @@ def main(argv: list[str]) -> int:
     language = resolve_language(args.translation)
     layout = resolve_layout(args.layout)
     # An explicit --layout on the CLI is a request to (re-)apply that layout to
-    # the note type, overwriting hand-edits; CARD_LAYOUT/.env or the default are
-    # not, so an existing note type's templates are left untouched.
+    # the note type, overwriting hand-edits; the default is not, so an existing
+    # note type's templates are left untouched.
     relayout = args.layout is not None
     if layout == "translation" and not language:
         raise Fatal(
