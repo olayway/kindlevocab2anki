@@ -937,6 +937,28 @@ hr#answer {
   border-top: 1px solid var(--line);
 }
 
+/* Production card: the vocab word inside the native prompt you must actively
+   render into the target language — inked and upright so the eye lands on it
+   (Claude wraps it in <b class="focus"> in the ProdNative fields). */
+.focus {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* The revealed model sentence on a production card's back. Reuses .sentence's
+   quoted-context frame but at full ink (not softened) since it IS the answer;
+   its own key word keeps the .sentence .target accent above. */
+.sentence.answer {
+  color: var(--ink);
+  font-style: normal;
+}
+
+/* A production card carries up to PRODUCTION_PAIRS pairs; an inline script
+   reveals one per calendar day, so the rest start hidden to avoid a flash. */
+.prod-pair ~ .prod-pair {
+  display: none;
+}
+
 /* Night mode: warm dark paper, light ink — same layout, inverted palette. */
 .nightMode.card, .nightMode .card, .night_mode.card, .night_mode .card {
   --paper:    #211d18;
@@ -982,11 +1004,96 @@ CARD_BACK_TRANSLATION = """\
 <div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
 
+# --------------------------------------------------------------------------
+# The production card (the active recall half). Independent of --layout:
+# production always prompts native → target (you read a native sentence and
+# must produce the target-language one), because the whole point is generating
+# language, not recognizing it.
+#
+# Each note carries up to PRODUCTION_PAIRS native/target pairs; exactly one is
+# shown per review, chosen by calendar day so the same note stays fresh across
+# reps. The index is `floor(Date.now()/86400000) % pairs`, recomputed
+# independently on front and back so they agree with no stored state. Accepted
+# edge case: a review that crosses local midnight can show pair i on the front
+# and pair i+1 on the back — negligible, and self-corrects next review.
+#
+# Empty-card gate: the whole template is wrapped in {{#ProdNative1}}…{{/…}},
+# and each further pair in {{#ProdNativeN}}, so notes with no production data
+# (pre-feature, or built without --production) generate no production card at
+# all — they naturally start rendering one once backfilled.
+#
+# Rendering note: the ProdNative/ProdTarget fields already contain Claude's
+# <b class="focus">/<b class="target"> markup, and Anki does not escape field
+# HTML, so they drop in as-is.
+
+# Shared rotation script: reveal pair `idx` in every rotation group on this
+# side (front has one group; back has the prompt group + the answer group, both
+# with the same pair count, so one index keeps them in sync). Pairs default to
+# hidden-but-first via CSS, so with JS off the card still shows pair 0.
+PRODUCTION_ROTATE_JS = """\
+<script>
+(function () {
+  var groups = document.querySelectorAll('.prod-rotation');
+  if (!groups.length) return;
+  var count = groups[0].querySelectorAll('.prod-pair').length;
+  var idx = Math.floor(Date.now() / 86400000) % count;
+  for (var g = 0; g < groups.length; g++) {
+    var pairs = groups[g].querySelectorAll('.prod-pair');
+    for (var i = 0; i < pairs.length; i++) {
+      pairs[i].style.display = (i === idx) ? 'block' : 'none';
+    }
+  }
+})();
+</script>"""
+
+PRODUCTION_FRONT = (
+    """\
+{{#ProdNative1}}
+<div class="prod-rotation">
+  <div class="prod-pair"><div class="prompt lead">{{ProdNative1}}</div></div>
+  {{#ProdNative2}}<div class="prod-pair"><div class="prompt lead">{{ProdNative2}}</div></div>{{/ProdNative2}}
+  {{#ProdNative3}}<div class="prod-pair"><div class="prompt lead">{{ProdNative3}}</div></div>{{/ProdNative3}}
+</div>
+<div class="gloss">Say it in the target language.</div>
+"""
+    + PRODUCTION_ROTATE_JS
+    + "\n{{/ProdNative1}}\n"
+)
+
+PRODUCTION_BACK = (
+    """\
+{{#ProdNative1}}
+<div class="prod-rotation">
+  <div class="prod-pair"><div class="prompt lead">{{ProdNative1}}</div></div>
+  {{#ProdNative2}}<div class="prod-pair"><div class="prompt lead">{{ProdNative2}}</div></div>{{/ProdNative2}}
+  {{#ProdNative3}}<div class="prod-pair"><div class="prompt lead">{{ProdNative3}}</div></div>{{/ProdNative3}}
+</div>
+<hr id=answer>
+<div class="prod-rotation">
+  <div class="prod-pair"><div class="sentence answer">{{ProdTarget1}}</div></div>
+  {{#ProdNative2}}<div class="prod-pair"><div class="sentence answer">{{ProdTarget2}}</div></div>{{/ProdNative2}}
+  {{#ProdNative3}}<div class="prod-pair"><div class="sentence answer">{{ProdTarget3}}</div></div>{{/ProdNative3}}
+</div>
+<div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
+"""
+    + PRODUCTION_ROTATE_JS
+    + "\n{{/ProdNative1}}\n"
+)
+
+# The two recognition layouts (--layout) plus the production template. The
+# recognition template is layout-driven; production is fixed native→target.
 LAYOUTS = {
     "definition": (CARD_FRONT, CARD_BACK),
     "translation": (CARD_FRONT_TRANSLATION, CARD_BACK_TRANSLATION),
 }
 DEFAULT_LAYOUT = "definition"
+
+# Card template names on the note type. The recognition card was historically
+# (mis)named "Production" in code; it is renamed in place — Anki keys review
+# history to template ordinal, not name, so the rename is lossless — and the
+# real active-production card takes the "Production" name.
+RECOGNITION_TEMPLATE = "Recognition"
+PRODUCTION_TEMPLATE = "Production"
 
 
 def card_templates(layout: str) -> tuple[str, str]:
@@ -995,27 +1102,60 @@ def card_templates(layout: str) -> tuple[str, str]:
 
 
 def ensure_model(layout: str = DEFAULT_LAYOUT, *, relayout: bool = False) -> None:
-    # Create the note type if absent. If it exists, leave it alone — the
-    # templates belong to the user after that, so hand-edits in Anki's card
-    # editor survive — UNLESS relayout is set, which means an explicit --layout
-    # asked for those templates: re-push them (and the CSS) onto the existing
-    # note type so every card re-renders in the new layout, no reprocessing.
+    # Create the note type if absent. If it exists, leave its templates to the
+    # user — hand-edits in Anki's card editor survive — EXCEPT for two managed
+    # migrations that keep the note type structurally current:
+    #   * the recognition template, historically (mis)named "Production", is
+    #     renamed in place to "Recognition" (Anki keys review history to the
+    #     template ordinal, not its name, so this is lossless);
+    #   * the real active-production "Production" template is added if missing.
+    # Both are idempotent. relayout (an explicit --layout) additionally re-pushes
+    # the recognition template + CSS so every card re-renders, no reprocessing.
     front, back = card_templates(layout)
     if MODEL_NAME in anki("modelNames"):
         # Add any fields the note type predates (e.g. SentenceFull on decks
-        # created before the back-of-card full sentence). Existing fields and
-        # their data are untouched; a missing one would silently render blank.
+        # created before the back-of-card full sentence, or the ProdNative/
+        # ProdTarget pair fields). Existing fields and their data are untouched;
+        # a missing one would silently render blank.
         present = anki("modelFieldNames", modelName=MODEL_NAME) or []
         for name in FIELDS:
             if name not in present:
                 anki("modelFieldAdd", modelName=MODEL_NAME, fieldName=name)
                 print(f"Added field {name!r} to note type {MODEL_NAME!r}")
+
+        templates = anki("modelTemplates", modelName=MODEL_NAME) or {}
+        renamed = False
+        if PRODUCTION_TEMPLATE in templates and RECOGNITION_TEMPLATE not in templates:
+            anki(
+                "modelTemplateRename",
+                modelName=MODEL_NAME,
+                oldTemplateName=PRODUCTION_TEMPLATE,
+                newTemplateName=RECOGNITION_TEMPLATE,
+            )
+            renamed = True
+            print(f"Renamed template {PRODUCTION_TEMPLATE!r} → {RECOGNITION_TEMPLATE!r}")
+        # After a rename the "Production" name is free again, so the real
+        # production card must be (re)added; otherwise add only if it's absent.
+        if renamed or PRODUCTION_TEMPLATE not in templates:
+            anki(
+                "modelTemplateAdd",
+                modelName=MODEL_NAME,
+                template={
+                    "Name": PRODUCTION_TEMPLATE,
+                    "Front": PRODUCTION_FRONT,
+                    "Back": PRODUCTION_BACK,
+                },
+            )
+            print(f"Added {PRODUCTION_TEMPLATE!r} card template to note type {MODEL_NAME!r}")
+
         if relayout:
+            # Re-push the recognition template under its (possibly just-renamed)
+            # key; leave the production template alone.
             anki(
                 "updateModelTemplates",
                 model={
                     "name": MODEL_NAME,
-                    "templates": {"Production": {"Front": front, "Back": back}},
+                    "templates": {RECOGNITION_TEMPLATE: {"Front": front, "Back": back}},
                 },
             )
             anki("updateModelStyling", model={"name": MODEL_NAME, "css": CARD_CSS})
@@ -1028,7 +1168,8 @@ def ensure_model(layout: str = DEFAULT_LAYOUT, *, relayout: bool = False) -> Non
         css=CARD_CSS,
         isCloze=False,
         cardTemplates=[
-            {"Name": "Production", "Front": front, "Back": back}
+            {"Name": RECOGNITION_TEMPLATE, "Front": front, "Back": back},
+            {"Name": PRODUCTION_TEMPLATE, "Front": PRODUCTION_FRONT, "Back": PRODUCTION_BACK},
         ],
     )
     print(f"Created note type {MODEL_NAME!r}")
@@ -1225,7 +1366,12 @@ def build_genanki_model(layout: str = DEFAULT_LAYOUT):
         GENANKI_MODEL_ID,
         MODEL_NAME,
         fields=[{"name": name} for name in FIELDS],
-        templates=[{"name": "Production", "qfmt": front, "afmt": back}],
+        # Same two templates as the AnkiConnect note type, in the same order:
+        # the layout-driven recognition card, then the fixed production card.
+        templates=[
+            {"name": RECOGNITION_TEMPLATE, "qfmt": front, "afmt": back},
+            {"name": PRODUCTION_TEMPLATE, "qfmt": PRODUCTION_FRONT, "afmt": PRODUCTION_BACK},
+        ],
         css=CARD_CSS,
     )
 
