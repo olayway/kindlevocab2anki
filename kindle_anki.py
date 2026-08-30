@@ -971,6 +971,23 @@ hr#answer {
   display: none;
 }
 
+/* Production front hint: the target word's first letter, the rest masked, and
+   its letter count — a nudge toward the looked-up word over a synonym. The
+   source node just carries {{Word}} for the script to read; keep it out of
+   view. Monospaced so the masked letter slots line up evenly. */
+.prod-hint-src {
+  display: none;
+}
+
+.prod-hint {
+  margin-top: 1.6em;
+  text-align: center;
+  color: var(--ink-soft);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.85em;
+  letter-spacing: 0.08em;
+}
+
 /* Night mode: warm dark paper, light ink — same layout, inverted palette. */
 .nightMode.card, .nightMode .card, .night_mode.card, .night_mode .card {
   --paper:    #211d18;
@@ -1058,6 +1075,37 @@ PRODUCTION_ROTATE_JS = """\
 })();
 </script>"""
 
+# A production prompt is answerable with a synonym, which sidesteps the point:
+# rehearsing the specific word you looked up. So the front carries a hint keyed
+# off the target headword ({{Word}}) — its first letter revealed, the rest of
+# each letter masked, plus the total letter count. Computed in JS from the field
+# text so it needs no stored field and lights up on every existing production
+# note. Reads {{Word}} from a hidden node's textContent (never an attribute) so
+# odd characters in the headword can't break the markup.
+PRODUCTION_HINT_JS = """\
+<script>
+(function () {
+  var src = document.querySelector('.prod-hint-src');
+  var out = document.querySelector('.prod-hint-out');
+  var box = document.querySelector('.prod-hint');
+  if (!src || !out || !box) return;
+  var word = (src.textContent || '').trim();
+  if (!word) { box.style.display = 'none'; return; }
+  var letters = 0, revealed = false;
+  var rendered = word.split(/\\s+/).filter(Boolean).map(function (w) {
+    var slots = [];
+    for (var i = 0; i < w.length; i++) {
+      letters++;
+      if (!revealed) { slots.push(w[i]); revealed = true; }
+      else { slots.push('_'); }
+    }
+    return slots.join(' ');
+  }).join('\\u2003');
+  out.textContent = rendered + '\\u2003\\u00b7\\u2003' + letters
+    + (letters === 1 ? ' letter' : ' letters');
+})();
+</script>"""
+
 PRODUCTION_FRONT = (
     """\
 {{#ProdNative1}}
@@ -1067,8 +1115,13 @@ PRODUCTION_FRONT = (
   {{#ProdNative3}}<div class="prod-pair"><div class="prompt lead">{{ProdNative3}}</div></div>{{/ProdNative3}}
 </div>
 <div class="gloss">Say it in the target language.</div>
+<div class="prod-hint">
+  <span class="prod-hint-src">{{Word}}</span>
+  <span class="prod-hint-out"></span>
+</div>
 """
     + PRODUCTION_ROTATE_JS
+    + PRODUCTION_HINT_JS
     + "\n{{/ProdNative1}}\n"
 )
 
@@ -1861,7 +1914,9 @@ def cluster_groups(
     output_config = {"format": {"type": "json_schema", "schema": schema}}
     if effort:
         output_config["effort"] = effort
-    response = client.messages.create(
+    # Stream: at max_tokens=32000 the SDK refuses a non-streaming call, since
+    # its worst case could exceed the 10-minute non-streaming ceiling.
+    with client.messages.stream(
         model=model,
         # Production pairs add ~6 sentences per card, several times a plain
         # result's size, so give the batch more room when they're requested.
@@ -1877,7 +1932,8 @@ def cluster_groups(
         messages=[
             {"role": "user", "content": json.dumps(groups, ensure_ascii=False)}
         ],
-    )
+    ) as stream:
+        response = stream.get_final_message()
     if response.stop_reason == "refusal":
         raise Fatal("Claude refused the request; nothing was recorded.")
     if response.stop_reason == "max_tokens":
@@ -1959,7 +2015,9 @@ def generate_production_pairs(
     }
     if effort:
         output_config["effort"] = effort
-    response = client.messages.create(
+    # Stream: at max_tokens=32000 the SDK refuses a non-streaming call, since
+    # its worst case could exceed the 10-minute non-streaming ceiling.
+    with client.messages.stream(
         model=model,
         max_tokens=32000,  # every card yields PRODUCTION_PAIRS pairs (6 sentences)
         system=[
@@ -1973,7 +2031,8 @@ def generate_production_pairs(
         messages=[
             {"role": "user", "content": json.dumps(cards, ensure_ascii=False)}
         ],
-    )
+    ) as stream:
+        response = stream.get_final_message()
     if response.stop_reason == "refusal":
         raise Fatal("Claude refused the production backfill; nothing was recorded.")
     if response.stop_reason == "max_tokens":
