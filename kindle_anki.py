@@ -951,12 +951,18 @@ hr#answer {
   color: var(--accent);
 }
 
-/* The revealed model sentence on a production card's back. Reuses .sentence's
-   quoted-context frame but at full ink (not softened) since it IS the answer;
-   its own key word keeps the .sentence .target accent above. */
-.sentence.answer {
-  color: var(--ink);
-  font-style: normal;
+/* The revealed model sentence on a production card's back: the answer itself,
+   so it's centered and fully inked — no quoted-context frame (it isn't a
+   citation), with its key word accented to match the prompt's focus word. */
+.answer {
+  font-size: 1.15em;
+  text-align: center;
+  margin-top: 0.9em;
+}
+
+.answer .target {
+  font-weight: 700;
+  color: var(--accent);
 }
 
 /* A production card carries up to PRODUCTION_PAIRS pairs; an inline script
@@ -1076,11 +1082,10 @@ PRODUCTION_BACK = (
 </div>
 <hr id=answer>
 <div class="prod-rotation">
-  <div class="prod-pair"><div class="sentence answer">{{ProdTarget1}}</div></div>
-  {{#ProdNative2}}<div class="prod-pair"><div class="sentence answer">{{ProdTarget2}}</div></div>{{/ProdNative2}}
-  {{#ProdNative3}}<div class="prod-pair"><div class="sentence answer">{{ProdTarget3}}</div></div>{{/ProdNative3}}
+  <div class="prod-pair"><div class="answer">{{ProdTarget1}}</div></div>
+  {{#ProdNative2}}<div class="prod-pair"><div class="answer">{{ProdTarget2}}</div></div>{{/ProdNative2}}
+  {{#ProdNative3}}<div class="prod-pair"><div class="answer">{{ProdTarget3}}</div></div>{{/ProdNative3}}
 </div>
-<div class="source">{{Source}}{{#LookupDate}} · {{LookupDate}}{{/LookupDate}}</div>
 """
     + PRODUCTION_ROTATE_JS
     + "\n{{/ProdNative1}}\n"
@@ -1155,13 +1160,21 @@ def ensure_model(layout: str = DEFAULT_LAYOUT, *, relayout: bool = False) -> Non
             print(f"Added {PRODUCTION_TEMPLATE!r} card template to note type {MODEL_NAME!r}")
 
         if relayout:
-            # Re-push the recognition template under its (possibly just-renamed)
-            # key; leave the production template alone.
+            # An explicit --layout re-applies the built-in look, so re-push both
+            # templates (recognition under its possibly just-renamed key, and the
+            # layout-independent production one) plus the shared CSS — this is
+            # also how a production-template tweak reaches an existing deck.
             anki(
                 "updateModelTemplates",
                 model={
                     "name": MODEL_NAME,
-                    "templates": {RECOGNITION_TEMPLATE: {"Front": front, "Back": back}},
+                    "templates": {
+                        RECOGNITION_TEMPLATE: {"Front": front, "Back": back},
+                        PRODUCTION_TEMPLATE: {
+                            "Front": PRODUCTION_FRONT,
+                            "Back": PRODUCTION_BACK,
+                        },
+                    },
                 },
             )
             anki("updateModelStyling", model={"name": MODEL_NAME, "css": CARD_CSS})

@@ -66,9 +66,12 @@ def test_ensure_model_relayout_repushes_templates_and_css(monkeypatch):
     actions = {action for action, _ in calls}
     assert {"updateModelTemplates", "updateModelStyling"} <= actions
     tmpl = next(p for a, p in calls if a == "updateModelTemplates")
-    # relayout re-pushes the recognition template under its (renamed) key.
-    front = tmpl["model"]["templates"][kindle_anki.RECOGNITION_TEMPLATE]["Front"]
+    templates = tmpl["model"]["templates"]
+    # relayout re-pushes the recognition template under its (renamed) key...
+    front = templates[kindle_anki.RECOGNITION_TEMPLATE]["Front"]
     assert "{{Translation}}" in front and "{{Definition}}" not in front
+    # ...and the production template too, so its edits reach an existing deck.
+    assert "{{ProdNative1}}" in templates[kindle_anki.PRODUCTION_TEMPLATE]["Front"]
 
 
 def test_ensure_model_leaves_layout_alone_without_relayout(monkeypatch):

@@ -42,7 +42,13 @@ def test_back_reveals_target_after_the_divider():
     # The native prompt is echoed above the divider; the target answer below it.
     assert "{{ProdNative1}}" in front_part
     assert "{{ProdTarget1}}" in answer_part
-    assert "{{Source}}" in answer_part
+
+
+def test_back_has_no_book_source_footer():
+    # Production sentences are generated, not quoted from a book, so a Source
+    # footer would falsely imply provenance — it must not appear.
+    assert "{{Source}}" not in PRODUCTION_BACK
+    assert "{{LookupDate}}" not in PRODUCTION_BACK
 
 
 def test_pair_counts_match_across_front_and_back_groups():
