@@ -58,7 +58,17 @@ FIELDS = [
     "Source",
     "LookupDate",
     "Lookups",
+    # Active-production card (--production): PRODUCTION_PAIRS native→target
+    # sentence pairs, one shown per review, rotated by calendar day. Empty on
+    # notes that predate the feature or were built without --production.
+    "ProdNative1",
+    "ProdTarget1",
+    "ProdNative2",
+    "ProdTarget2",
+    "ProdNative3",
+    "ProdTarget3",
 ]
+PRODUCTION_PAIRS = 3  # native/target sentence pairs per production card
 BLANK = "_____"
 # Back-of-card replacement: wrap the answer (in its original inflected form) so
 # the eye lands on it inside the full sentence. `\g<0>` re-inserts the match.
@@ -96,6 +106,7 @@ class LanguageProfile:
     boundaries: bool  # blank_out: wrap matches in word boundaries (\b…\b)
     ignore_case: bool  # blank_out: match case-insensitively
     inflection: bool  # blank_out: fall back to inflected word/stem (word\w*)
+    level: str | None = None  # optional CEFR level (A1–C2) for --production sentences
 
 
 _REQUIRED_FIELDS = {
@@ -147,6 +158,12 @@ def load_languages(path: Path = LANGUAGES_FILE) -> dict[str, LanguageProfile]:
                 raise Fatal(f"{where} field {field!r} must be true/false.")
             if want is str and (not isinstance(value, str) or isinstance(value, bool)):
                 raise Fatal(f"{where} field {field!r} must be text.")
+        # `level` is optional (only --production uses it), so it stays out of
+        # _REQUIRED_FIELDS and existing YAML without it stays valid. Validate the
+        # CEFR value itself lazily in resolve_level, where the CLI can override it.
+        level = entry.get("level")
+        if level is not None and (not isinstance(level, str) or isinstance(level, bool)):
+            raise Fatal(f"{where} field 'level' must be text (a CEFR level like 'B1').")
         profiles[str(code).lower()] = LanguageProfile(
             code=str(code).lower(),
             name=entry["name"],
@@ -154,6 +171,7 @@ def load_languages(path: Path = LANGUAGES_FILE) -> dict[str, LanguageProfile]:
             boundaries=entry["boundaries"],
             ignore_case=entry["ignore_case"],
             inflection=entry["inflection"],
+            level=level,
         )
     if not profiles:
         raise Fatal(f"{path} defines no languages.")
@@ -1301,6 +1319,27 @@ def resolve_learning(
     return languages[code]
 
 
+CEFR_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
+
+
+def resolve_level(cli_value: str | None, learning: LanguageProfile) -> str | None:
+    """CEFR level for --production sentences: --level flag, else the learning
+    language's `level` in languages.yaml, else None.
+
+    Normalises to upper case and rejects anything outside A1–C2 so a typo fails
+    fast rather than silently reaching the prompt. Only consulted when
+    --production is set, so a bad `level:` never breaks an ordinary run.
+    """
+    raw = (cli_value or learning.level or "").strip()
+    if not raw:
+        return None
+    level = raw.upper()
+    if level not in CEFR_LEVELS:
+        known = ", ".join(CEFR_LEVELS)
+        raise Fatal(f"Unknown CEFR level {raw!r}. Known levels: {known}.")
+    return level
+
+
 def cluster_system_prompt(
     learning: LanguageProfile, language: str | None = None
 ) -> str:
@@ -1591,6 +1630,28 @@ def main(argv: list[str]) -> int:
         "in .env). Orthogonal to --learning.",
     )
     parser.add_argument(
+        "--production",
+        action="store_true",
+        help="also build active-production cards: a native-language sentence "
+        "prompts you to produce the target word in context. Requires "
+        "--translation and a CEFR --level.",
+    )
+    parser.add_argument(
+        "--level",
+        metavar="CEFR",
+        help="CEFR level (A1–C2) that every non-target word in --production "
+        "sentences is pinned to (falls back to 'level:' on the --learning entry "
+        "in languages.yaml). Only the target word is harder.",
+    )
+    parser.add_argument(
+        "--promote-after",
+        choices=["seen", "graduated", "mature"],
+        default="graduated",
+        help="when to unsuspend a production card: once its recognition sibling "
+        "has been seen, graduated from learning (default), or gone mature "
+        "(interval ≥ 21 days). Live mode only.",
+    )
+    parser.add_argument(
         "--layout",
         choices=sorted(LAYOUTS),
         help="card layout (default: definition). 'definition' prompts with the "
@@ -1623,6 +1684,25 @@ def main(argv: list[str]) -> int:
             "it needs a translation: pass --translation (e.g. --translation Polish) or "
             "set TRANSLATION_LANGUAGE in .env."
         )
+
+    # Production cards prompt in the native language and pin every non-target
+    # word to a CEFR level, so both must resolve before we do any work.
+    if args.production:
+        level = resolve_level(args.level, learning)
+        if not language:
+            raise Fatal(
+                "--production builds cards that prompt in your native language, "
+                "so it needs one: pass --translation (e.g. --translation Polish) "
+                "or set TRANSLATION_LANGUAGE in .env."
+            )
+        if not level:
+            raise Fatal(
+                "--production pins every non-target word to a CEFR level, so it "
+                "needs one: pass --level (e.g. --level B1) or set 'level:' on the "
+                f"{learning.name} entry in languages.yaml."
+            )
+    else:
+        level = None
 
     if args.force_lang and not args.book:
         raise Fatal(

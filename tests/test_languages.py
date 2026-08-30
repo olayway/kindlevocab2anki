@@ -7,6 +7,7 @@ is independent of the back-of-card translation language. Profiles are loaded
 from languages.yaml (no in-code table) — see load_languages tests below.
 """
 
+import dataclasses
 import sqlite3
 
 import pytest
@@ -18,6 +19,7 @@ from kindle_anki import (
     load_languages,
     read_lookups,
     resolve_learning,
+    resolve_level,
 )
 from tests.conftest import LANGS
 
@@ -62,6 +64,44 @@ def test_default_missing_from_config_is_fatal(monkeypatch):
     without_en = {k: v for k, v in LANGS.items() if k != "en"}
     with pytest.raises(Fatal, match="Unknown --learning 'en'"):
         resolve_learning(None, without_en)
+
+
+# --- resolve_level: the CEFR level for --production sentences --------------
+
+
+def _with_level(level):
+    return dataclasses.replace(LANGS["en"], level=level)
+
+
+def test_level_none_when_unset():
+    assert resolve_level(None, _with_level(None)) is None
+
+
+def test_level_from_cli_is_uppercased():
+    assert resolve_level("b1", _with_level(None)) == "B1"
+
+
+def test_level_falls_back_to_profile():
+    assert resolve_level(None, _with_level("A2")) == "A2"
+
+
+def test_level_cli_overrides_profile():
+    assert resolve_level("C1", _with_level("A2")) == "C1"
+
+
+def test_level_blank_profile_is_none():
+    assert resolve_level(None, _with_level("  ")) is None
+
+
+def test_unknown_cli_level_is_fatal():
+    with pytest.raises(Fatal, match="Unknown CEFR level 'ZZ'"):
+        resolve_level("ZZ", _with_level(None))
+
+
+def test_unknown_profile_level_is_fatal():
+    # A bad `level:` in the YAML only surfaces when --production consults it.
+    with pytest.raises(Fatal, match="Unknown CEFR level 'X9'"):
+        resolve_level(None, _with_level("X9"))
 
 
 # --- load_languages: the file is the sole source, so it validates hard -----
@@ -144,6 +184,23 @@ def test_code_is_lowercased_from_key(tmp_path):
     path = _write(tmp_path, VALID_EN.replace("en:", "EN:"))
     langs = load_languages(path)
     assert "en" in langs and langs["en"].code == "en"
+
+
+def test_level_is_optional_and_defaults_none(tmp_path):
+    # VALID_EN carries no `level:`, so existing configs stay valid.
+    path = _write(tmp_path, VALID_EN)
+    assert load_languages(path)["en"].level is None
+
+
+def test_level_is_read_when_present(tmp_path):
+    path = _write(tmp_path, VALID_EN + "  level: B1\n")
+    assert load_languages(path)["en"].level == "B1"
+
+
+def test_non_text_level_is_fatal(tmp_path):
+    path = _write(tmp_path, VALID_EN + "  level: true\n")
+    with pytest.raises(Fatal, match="'level' must be text"):
+        load_languages(path)
 
 
 # --- the read gate --------------------------------------------------------
