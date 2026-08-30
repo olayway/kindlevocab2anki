@@ -56,6 +56,7 @@ def test_new_verdict_builds_one_note_with_all_fields():
         "Word": "afflict",
         "Definition": "to cause suffering to",
         "Sentence": "Diseases that _____ us.",
+        "SentenceFull": 'Diseases that <b class="target">afflict</b> us.',
         "Source": "Zebras — Sapolsky",
         "LookupDate": "1970-01-01",
         "Lookups": "L1",
@@ -132,6 +133,7 @@ def test_shared_card_joins_ids_and_primary_is_earliest():
     assert fields["Lookups"] == "L1,L2"
     assert fields["Source"] == "Earlier Book — A"
     assert fields["Sentence"] == "The river _____ flooded."
+    assert fields["SentenceFull"] == 'The river <b class="target">banks</b> flooded.'
 
 
 def test_junk_verdict_records_reason_and_makes_no_note():

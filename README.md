@@ -5,7 +5,7 @@
 
 Turns the words you look up while reading on a Kindle into Anki flashcards — one card per **sense**, not per word. Claude reads the sentence each lookup appeared in, splits a word's distinct meanings into separate cards, builds cards for the phrasal verb or idiom a word belongs to, and merges repeat lookups of the same sense.
 
-You see a definition and the sentence with the answer blanked out; you recall the word. The back confirms it — and, if you turn on translations, adds a translation of that same sense into your native language.
+You see a definition and the sentence with the answer blanked out; you recall the word. The back confirms it — the word, the full sentence with the answer filled back in (in the exact inflected form it wore in the book, highlighted), and, if you turn on translations, a translation of that same sense into your native language.
 
 ![](definition-layout.png)
 
@@ -84,8 +84,8 @@ The three booleans replace what used to be a fixed `spaced`/`cjk` strategy, so y
 
 Every card holds the same fields; the **layout** only decides which one prompts you on the front and which is revealed on the back. Pick it with `--layout`:
 
-- **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the word, plus the native translation if `--translation` is set. You recall the word from a meaning stated in the language itself.
-- **`translation`** — front: your **native** translation + the blanked sentence; back: the word and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--translation`** (it errors out otherwise).
+- **`definition`** (default) — front: the learning-language definition + the sentence with the answer blanked; back: the full sentence with the answer filled in and highlighted, the word, plus the native translation if `--translation` is set. You recall the word from a meaning stated in the language itself.
+- **`translation`** — front: your **native** translation + the blanked sentence; back: the full sentence with the answer filled in and highlighted, the word, and its definition. For total beginners: a definition written in a language you can't read yet isn't a prompt, it's a second puzzle, so the native word does the prompting instead. Because the front shows the translation, this layout **requires `--translation`** (it errors out otherwise).
 
 ```sh
 # Beginner French deck: Polish on the front, definition revealed on the back
@@ -229,7 +229,7 @@ Kindle vocab.db ──copy──▶ ./vocab.db ──▶ every lookup in the lea
 On the first `--apply` the script creates, if missing:
 
 - **Deck** `<Language>::Kindle`, named for the learning language — `English::Kindle` by default, `French::Kindle` under `--learning fr`, and so on
-- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--translation`, and the template hides it when empty.
+- **Note type** `Kindle Vocab` with fields `Stem`, `Word`, `Translation`, `Definition`, `Sentence`, `SentenceFull`, `Source`, `LookupDate`, `Lookups`, and a single **Production** card template. `Sentence` holds the blanked prompt; `SentenceFull` holds the same sentence with the answer filled back in and wrapped in `<b class="target">…</b>` for the back. Its front/back split follows `--layout`: by default (`definition`) the definition + blanked sentence prompt the front and the full sentence, word, translation, and source are revealed on the back; `--layout translation` flips the definition and translation so the native word prompts the front instead ([Card layout](#card-layout)). The `Translation` field stays empty unless you run with `--translation`, and the template hides it when empty. A deck created before `SentenceFull` existed gains the field automatically on the next run.
 
 `Stem` and `Lookups` are hidden bookkeeping fields — never rendered on a card.
 `Stem` is the lemma index used to find a stem's cards quickly; `Lookups` is the comma-joined list of the `LOOKUPS.id`s that produced or were absorbed by the card, and is the source of truth for what's already handled.

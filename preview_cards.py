@@ -29,6 +29,8 @@ SAMPLES: list[dict[str, str]] = [
         "Translation": "ulotny",
         "Definition": "Lasting for a very short time; fleeting.",
         "Sentence": "The _____ beauty of the cherry blossoms drew crowds each spring.",
+        "SentenceFull": 'The <b class="target">ephemeral</b> beauty of the '
+        "cherry blossoms drew crowds each spring.",
         "Source": "The Remains of the Day",
         "LookupDate": "2026-08-14",
     },
@@ -37,6 +39,7 @@ SAMPLES: list[dict[str, str]] = [
         "Translation": "towarzyski",
         "Definition": "Fond of the company of others; sociable.",
         "Sentence": "",  # no example sentence -> section should collapse
+        "SentenceFull": "",
         "Source": "A Little Life",
         "LookupDate": "2026-08-10",
     },
@@ -46,6 +49,8 @@ SAMPLES: list[dict[str, str]] = [
         "Definition": "A pleasant smell frequently accompanying the first rain "
         "after a long period of warm, dry weather.",
         "Sentence": "The _____ rose from the pavement as the storm finally broke.",
+        "SentenceFull": 'The <b class="target">petrichor</b> rose from the '
+        "pavement as the storm finally broke.",
         "Source": "Klara and the Sun",
         "LookupDate": "2026-08-02",
     },

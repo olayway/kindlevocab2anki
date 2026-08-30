@@ -54,11 +54,15 @@ FIELDS = [
     TRANSLATION_FIELD,
     "Definition",
     "Sentence",
+    "SentenceFull",
     "Source",
     "LookupDate",
     "Lookups",
 ]
 BLANK = "_____"
+# Back-of-card replacement: wrap the answer (in its original inflected form) so
+# the eye lands on it inside the full sentence. `\g<0>` re-inserts the match.
+HIGHLIGHT = r'<b class="target">\g<0></b>'
 
 DEFAULT_MODEL = "claude-sonnet-5"
 BATCH_SIZE = 40
@@ -346,6 +350,65 @@ def matches_books(lk: Lookup, patterns: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 
+def _mark_target(
+    sentence: str,
+    span,
+    word: str,
+    stem: str,
+    boundaries: bool,
+    ignore_case: bool,
+    inflection: bool,
+    replacement: str,
+) -> str:
+    """Find the answer in `sentence` and rewrite it via `replacement`.
+
+    Shared matcher for both card sides: `blank_out` hides the answer on the
+    front, `highlight` marks it on the back — same span/word/stem search, same
+    fallbacks, only the `re.sub` replacement differs.
+
+    `span` is the exact surface span Claude flagged. It may be a single string
+    (a contiguous expression like "make off") or a list of strings for a
+    separable phrasal verb split by its object ("tie ... up" in "she tied her
+    hair up" → ["tied", "up"]). Every piece must match verbatim, or we fall
+    back rather than emit a half-rewritten sentence. If nothing matches, leave
+    the sentence intact rather than mangle it.
+
+    Three flags (from the language profile) drive the matcher:
+      * `boundaries` — wrap each match in word boundaries (\\b…\\b). On for
+        spaced scripts (Latin, Cyrillic, …); off for scripts with no word
+        breaks (Japanese, Chinese, Thai), where matches are plain substrings.
+      * `ignore_case` — match case-insensitively. Off for caseless scripts.
+      * `inflection` — after the span(s), fall back to the inflected word then
+        stem (`word\\w*`) to catch e.g. "afflict" → "afflicted". Off where a
+        suffix expansion is meaningless, so only the exact span is rewritten.
+    """
+    flags = re.IGNORECASE if ignore_case else 0
+    edge = r"\b" if boundaries else ""
+
+    parts = [span] if isinstance(span, str) else list(span or [])
+    parts = [p for p in parts if p]
+    if parts:
+        # Exact surface form(s) — match verbatim, no inflection expansion.
+        marked = sentence
+        for part in parts:
+            pattern = re.compile(rf"{edge}{re.escape(part)}{edge}", flags)
+            marked, n = pattern.subn(replacement, marked)
+            if not n:
+                break  # all-or-nothing: fall through to word/stem
+        else:
+            return marked
+    if inflection:
+        for candidate in (word, stem):
+            if not candidate:
+                continue
+            # Fallback: expand to catch inflections ("afflict" -> "afflicted").
+            pattern = re.compile(rf"{edge}{re.escape(candidate)}\w*{edge}", flags)
+            marked, n = pattern.subn(replacement, sentence)
+            if n:
+                return marked
+    return sentence
+
+
 def blank_out(
     sentence: str,
     span,
@@ -355,49 +418,26 @@ def blank_out(
     ignore_case: bool = True,
     inflection: bool = True,
 ) -> str:
-    """Replace the answer with a blank; try Claude's span(s), then word, then stem.
+    """Replace the answer with a blank on the card front — see `_mark_target`."""
+    return _mark_target(
+        sentence, span, word, stem, boundaries, ignore_case, inflection, BLANK
+    )
 
-    `span` is the exact surface span Claude asked us to hide. It may be a
-    single string (a contiguous expression like "make off") or a list of
-    strings for a separable phrasal verb split by its object ("tie ... up" in
-    "she tied her hair up" → ["tied", "up"]). Every piece must match verbatim,
-    or we fall back rather than emit a half-blanked sentence. If nothing
-    matches, leave the sentence intact rather than mangle it.
 
-    Three flags (from the language profile) drive the matcher:
-      * `boundaries` — wrap each match in word boundaries (\\b…\\b). On for
-        spaced scripts (Latin, Cyrillic, …); off for scripts with no word
-        breaks (Japanese, Chinese, Thai), where matches are plain substrings.
-      * `ignore_case` — match case-insensitively. Off for caseless scripts.
-      * `inflection` — after the span(s), fall back to the inflected word then
-        stem (`word\\w*`) to catch e.g. "afflict" → "afflicted". Off where a
-        suffix expansion is meaningless, so only the exact span is hidden.
-    """
-    flags = re.IGNORECASE if ignore_case else 0
-    edge = r"\b" if boundaries else ""
-
-    parts = [span] if isinstance(span, str) else list(span or [])
-    parts = [p for p in parts if p]
-    if parts:
-        # Exact surface form(s) — match verbatim, no inflection expansion.
-        blanked = sentence
-        for part in parts:
-            pattern = re.compile(rf"{edge}{re.escape(part)}{edge}", flags)
-            blanked, n = pattern.subn(BLANK, blanked)
-            if not n:
-                break  # all-or-nothing: fall through to word/stem
-        else:
-            return blanked
-    if inflection:
-        for candidate in (word, stem):
-            if not candidate:
-                continue
-            # Fallback: expand to catch inflections ("afflict" -> "afflicted").
-            pattern = re.compile(rf"{edge}{re.escape(candidate)}\w*{edge}", flags)
-            blanked, n = pattern.subn(BLANK, sentence)
-            if n:
-                return blanked
-    return sentence
+def highlight(
+    sentence: str,
+    span,
+    word: str,
+    stem: str,
+    boundaries: bool = True,
+    ignore_case: bool = True,
+    inflection: bool = True,
+) -> str:
+    """Bold the answer (in its original inflected form) for the card back, so
+    the full sentence shows how the word is really used — see `_mark_target`."""
+    return _mark_target(
+        sentence, span, word, stem, boundaries, ignore_case, inflection, HIGHLIGHT
+    )
 
 
 def book_tag(title: str) -> str:
@@ -500,6 +540,15 @@ def build_notes(
             "Word": card["headword"],
             "Definition": card["definition"],
             "Sentence": blank_out(
+                primary.sentence,
+                card.get("span", []),
+                primary.word,
+                primary.stem,
+                learning.boundaries,
+                learning.ignore_case,
+                learning.inflection,
+            ),
+            "SentenceFull": highlight(
                 primary.sentence,
                 card.get("span", []),
                 primary.word,
@@ -820,6 +869,14 @@ CARD_CSS = """\
   border-left: 2px solid var(--line);
 }
 
+/* The revealed answer inside the full sentence on the back: upright and inked
+   so it stands out from the italic, softened context around it. */
+.sentence .target {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--accent);
+}
+
 /* The reveal divider (Anki inserts <hr id=answer>). */
 hr#answer {
   border: none;
@@ -865,7 +922,8 @@ CARD_FRONT = """\
 """
 
 CARD_BACK = """\
-{{FrontSide}}
+<div class="definition lead">{{Definition}}</div>
+{{#SentenceFull}}<div class="sentence">{{SentenceFull}}</div>{{/SentenceFull}}
 <hr id=answer>
 <div class="word">{{Word}}</div>
 {{#Translation}}<div class="translation gloss">{{Translation}}</div>{{/Translation}}
@@ -885,7 +943,8 @@ CARD_FRONT_TRANSLATION = """\
 """
 
 CARD_BACK_TRANSLATION = """\
-{{FrontSide}}
+<div class="translation lead">{{Translation}}</div>
+{{#SentenceFull}}<div class="sentence">{{SentenceFull}}</div>{{/SentenceFull}}
 <hr id=answer>
 <div class="word">{{Word}}</div>
 {{#Definition}}<div class="definition gloss">{{Definition}}</div>{{/Definition}}
@@ -912,6 +971,14 @@ def ensure_model(layout: str = DEFAULT_LAYOUT, *, relayout: bool = False) -> Non
     # note type so every card re-renders in the new layout, no reprocessing.
     front, back = card_templates(layout)
     if MODEL_NAME in anki("modelNames"):
+        # Add any fields the note type predates (e.g. SentenceFull on decks
+        # created before the back-of-card full sentence). Existing fields and
+        # their data are untouched; a missing one would silently render blank.
+        present = anki("modelFieldNames", modelName=MODEL_NAME) or []
+        for name in FIELDS:
+            if name not in present:
+                anki("modelFieldAdd", modelName=MODEL_NAME, fieldName=name)
+                print(f"Added field {name!r} to note type {MODEL_NAME!r}")
         if relayout:
             anki(
                 "updateModelTemplates",
