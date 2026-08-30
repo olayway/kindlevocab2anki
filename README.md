@@ -129,6 +129,8 @@ uv run kindle_anki.py --learning fr --translation Polish --production --level B1
 
 Each note gets **three** native → target sentence pairs, and the card shows **one per calendar day**, rotated by an inline script that front and back compute identically — so the pair stays in sync with no stored state, and a word you see every day still varies. (A review that spans local midnight may show one pair's prompt and the next pair's answer; harmless, and it self-corrects on the next review.)
 
+**A first-letter hint keeps you honest.** A production prompt is answerable with a synonym — which quietly defeats the point of drilling the specific word you looked up. So the front carries a hint keyed off the target word: its first letter revealed, the rest of each letter masked, and the total letter count, e.g. `c _ _ _ _ _ · 6 letters`. It's computed in the card's JavaScript from the word itself, so it needs no extra field and appears on every production card — including ones built before the hint existed, with no rebuild.
+
 **Lifecycle — cards unlock themselves.** Being asked to *produce* a word you've only just met is discouraging, so production cards are **born suspended** and live in a `…::Kindle::Production` subdeck. A production card **unsuspends itself** once its recognition sibling reaches a threshold, set by `--promote-after`:
 
 | `--promote-after` | Unlocks the production card once its recognition sibling… |
