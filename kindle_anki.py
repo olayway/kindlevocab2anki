@@ -1603,6 +1603,45 @@ def resolve_level(cli_value: str | None, learning: LanguageProfile) -> str | Non
     return level
 
 
+def production_pair_rules(learning: LanguageProfile, language: str, level: str) -> str:
+    """The per-pair spec for production sentences (native prompt + target answer),
+    shared by the clustering prompt and the standalone backfill prompt so the
+    <b class="focus">/<b class="target"> markup and CEFR pinning never drift.
+    Both bullets are indented to nest under a `production` heading in either.
+    """
+    return (
+        f"    - `native`: a natural {language} sentence using this sense, with the "
+        f"one word or phrase that corresponds to the {learning.name} headword "
+        'wrapped in `<b class="focus">…</b>`. Every OTHER word must sit at CEFR '
+        f"{level} or below, so only the target concept is hard. Vary the "
+        f"{PRODUCTION_PAIRS} sentences in topic and structure.\n"
+        f"    - `target`: the full {learning.name} translation of that `native` "
+        'sentence, with the headword wrapped in `<b class="target">…</b>` (in '
+        f"whatever inflected form the sentence needs). Keep the rest near CEFR "
+        f"{level}.\n"
+        "    Emit the bold markup literally; do not escape the angle brackets."
+    )
+
+
+def production_array_schema() -> dict:
+    """Schema for a `production` value: exactly PRODUCTION_PAIRS native/target
+    pairs. Shared by the clustering and backfill schemas."""
+    return {
+        "type": "array",
+        "minItems": PRODUCTION_PAIRS,
+        "maxItems": PRODUCTION_PAIRS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "native": {"type": "string"},
+                "target": {"type": "string"},
+            },
+            "required": ["native", "target"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def cluster_system_prompt(
     learning: LanguageProfile,
     language: str | None = None,
@@ -1627,16 +1666,7 @@ def cluster_system_prompt(
     production_bullet = (
         f"\n  - `production`: a list of exactly {PRODUCTION_PAIRS} sentence pairs "
         "that drill actively PRODUCING this headword in context. Each pair has:\n"
-        f"    - `native`: a natural {language} sentence using this sense, with the "
-        f"one word or phrase that corresponds to the {learning.name} headword "
-        'wrapped in `<b class="focus">…</b>`. Every OTHER word must sit at CEFR '
-        f"{level} or below, so only the target concept is hard. Vary the "
-        f"{PRODUCTION_PAIRS} sentences in topic and structure.\n"
-        f"    - `target`: the full {learning.name} translation of that `native` "
-        'sentence, with the headword wrapped in `<b class="target">…</b>` (in '
-        f"whatever inflected form the sentence needs). Keep the rest near CEFR "
-        f"{level}.\n"
-        "    Emit the bold markup literally; do not escape the angle brackets."
+        + production_pair_rules(learning, language, level)
         if level
         else ""
     )
@@ -1734,20 +1764,7 @@ def cluster_schema(
         card_props["translation"] = {"type": "string"}
         card_required.append("translation")
     if with_production:
-        card_props["production"] = {
-            "type": "array",
-            "minItems": PRODUCTION_PAIRS,
-            "maxItems": PRODUCTION_PAIRS,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "native": {"type": "string"},
-                    "target": {"type": "string"},
-                },
-                "required": ["native", "target"],
-                "additionalProperties": False,
-            },
-        }
+        card_props["production"] = production_array_schema()
         card_required.append("production")
     return {
         "type": "object",
@@ -1845,6 +1862,175 @@ def cluster_groups(
     text = next((b.text for b in response.content if b.type == "text"), "")
     data = json.loads(text)
     return {g["stem"].strip().lower(): g for g in data["groups"]}
+
+
+# --------------------------------------------------------------------------
+# production backfill — production pairs for the back catalogue
+# --------------------------------------------------------------------------
+
+
+def backfill_production_prompt(
+    learning: LanguageProfile, language: str, level: str
+) -> str:
+    """System prompt for the standalone production-pair backfill call.
+
+    Unlike the clustering prompt this works from cards already in the deck, so
+    each input carries the settled `word`/`definition` (no sense-splitting to do)
+    and an example `sentence` purely as a sense cue.
+    """
+    return f"""\
+You write active-production practice sentences for a {learning.name} learner.
+
+You receive a JSON array of cards already in the learner's deck. Each card has:
+  - `id`: an opaque identifier to echo back unchanged.
+  - `word`: the {learning.name} headword being studied — the answer to produce.
+  - `definition`: its {learning.name} definition, fixing the exact sense to use.
+  - `sentence`: a real example the word appeared in, for sense context only. It \
+may carry <b> markup or be empty — never quote it back; write fresh sentences.
+
+For each card, return a `production` list of exactly {PRODUCTION_PAIRS} sentence \
+pairs that drill actively PRODUCING `word` in this sense. Each pair has:
+{production_pair_rules(learning, language, level)}
+
+Echo each card's `id`. Return exactly one result per input card.
+"""
+
+
+def backfill_production_schema() -> dict:
+    """Structured-output schema for the backfill call: one `production` list
+    (PRODUCTION_PAIRS native/target pairs) per echoed card id."""
+    return {
+        "type": "object",
+        "properties": {
+            "cards": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "production": production_array_schema(),
+                    },
+                    "required": ["id", "production"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["cards"],
+        "additionalProperties": False,
+    }
+
+
+def generate_production_pairs(
+    client,
+    model: str,
+    cards: list[dict],
+    learning: LanguageProfile,
+    language: str,
+    level: str,
+    effort: str | None = None,
+) -> dict[str, list[dict]]:
+    """Ask Claude for production pairs for each {id, word, definition, sentence}
+    card; return {id: [{native, target}, ...]}. Mirrors cluster_groups."""
+    output_config = {
+        "format": {"type": "json_schema", "schema": backfill_production_schema()}
+    }
+    if effort:
+        output_config["effort"] = effort
+    response = client.messages.create(
+        model=model,
+        max_tokens=16000,
+        system=[
+            {
+                "type": "text",
+                "text": backfill_production_prompt(learning, language, level),
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        output_config=output_config,
+        messages=[
+            {"role": "user", "content": json.dumps(cards, ensure_ascii=False)}
+        ],
+    )
+    if response.stop_reason == "refusal":
+        raise Fatal("Claude refused the production backfill; nothing was recorded.")
+    if response.stop_reason == "max_tokens":
+        raise Fatal("Claude hit max_tokens mid-batch; try a smaller --batch-size.")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    data = json.loads(text)
+    return {c["id"]: c.get("production", []) for c in data["cards"]}
+
+
+def backfill_production(
+    client,
+    model: str,
+    deck_name: str,
+    learning: LanguageProfile,
+    language: str,
+    level: str,
+    *,
+    limit: int | None = None,
+    batch_size: int = BATCH_SIZE,
+    effort: str | None = None,
+) -> None:
+    """Generate production pairs for deck notes that lack them (ProdNative1 empty)
+    — the back catalogue built before --production, or without it.
+
+    Grounds Claude on each note's Word, Definition, and real book SentenceFull
+    (falling back to the blanked Sentence), then fills the six ProdNative*/
+    ProdTarget* fields. Idempotent (only empty notes are queried), resumable
+    (each note is written as its batch completes), and respects --limit.
+    """
+    empty = anki(
+        "findNotes", query=f'deck:"{deck_name}" "note:{MODEL_NAME}" ProdNative1:'
+    )
+    if not empty:
+        return
+    cards = []
+    for note in anki("notesInfo", notes=empty):
+        f = note["fields"]
+        word = f.get("Word", {}).get("value", "").strip()
+        definition = f.get("Definition", {}).get("value", "").strip()
+        if not word or not definition:
+            continue  # can't ground a pair without both — leave it for later
+        sentence = (
+            f.get("SentenceFull", {}).get("value", "").strip()
+            or f.get("Sentence", {}).get("value", "").strip()
+        )
+        cards.append(
+            {
+                "id": str(note["noteId"]),
+                "word": word,
+                "definition": definition,
+                "sentence": sentence,
+            }
+        )
+    if not cards:
+        return
+    if limit is not None:
+        cards = cards[:limit]
+    batches = (len(cards) + batch_size - 1) // batch_size
+    print(
+        f"Backfilling production pairs on {len(cards)} card(s) with Claude in "
+        f"{batches} batch(es) of up to {batch_size} (each is a paid {model} call)."
+    )
+    filled = 0
+    for i in range(0, len(cards), batch_size):
+        batch = cards[i : i + batch_size]
+        pairs_by_id = generate_production_pairs(
+            client, model, batch, learning, language, level, effort
+        )
+        for card in batch:
+            pairs = pairs_by_id.get(card["id"], [])
+            if not pairs:
+                continue  # model dropped this card — retry on a later run
+            fields = {}
+            for n in range(1, PRODUCTION_PAIRS + 1):
+                pair = pairs[n - 1] if n - 1 < len(pairs) else {}
+                fields[f"ProdNative{n}"] = pair.get("native", "")
+                fields[f"ProdTarget{n}"] = pair.get("target", "")
+            anki("updateNoteFields", note={"id": int(card["id"]), "fields": fields})
+            filled += 1
+    print(f"Backfilled production pairs on {filled} card(s)")
 
 
 # --------------------------------------------------------------------------
@@ -2093,12 +2279,14 @@ def main(argv: list[str]) -> int:
         print("\nDry run — nothing written. Re-run with --apply to commit.")
         return 0
 
-    if not new_lookups:
+    # Live --production also maintains the back catalogue every run: backfill
+    # production pairs onto notes that lack them, then run the lifecycle sweep.
+    # This must happen even with no new lookups, so it gates the early-exit and
+    # forces the Claude client to be set up below.
+    production_maint = args.production and not offline
+
+    if not new_lookups and not production_maint:
         print("\nNothing to do.")
-        # Even with no new lookups, promote any production cards whose sibling
-        # graduated since the last run (live mode only; idempotent).
-        if args.production and not offline:
-            reconcile_production(deck_name, args.promote_after)
         return 0
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -2112,53 +2300,67 @@ def main(argv: list[str]) -> int:
     except ImportError as exc:  # pragma: no cover - uv installs this
         raise Fatal(f"The anthropic package is unavailable: {exc}") from exc
 
-    if offline:
-        sink: Sink = ApkgSink(export_path, state, deck_name, layout)
-        if args.production:
-            print(
-                "Note: offline export builds production cards but can't suspend "
-                "or promote them — run a live --production --apply to reconcile "
-                "their lifecycle once imported."
-            )
-    else:
-        ensure_model(layout)
-        ensure_deck(deck_name)
-        sink = LiveSink()
     client = anthropic.Anthropic()
 
-    extras = []
-    if language:
-        extras.append(f"{language} translations")
-    if level:
-        extras.append(f"{level} production pairs")
-    lang_note = f" (with {' and '.join(extras)})" if extras else ""
-    print(
-        f"\nWriting {len(new_lookups)} {learning.name} card(s) with Claude"
-        f"{lang_note}. Each card is generated by {args.model}; this can take a "
-        f"minute per batch — progress is shown below.\n"
-    )
-    added, updated, junked = apply_new_cards(
-        client,
-        args.model,
-        new_lookups,
-        existing_index,
-        skipped,
-        learning,
-        deck_name,
-        batch_size=args.batch_size,
-        language=language,
-        level=level,
-        sink=sink,
-    )
-    save_skipped(skipped)
+    added = updated = junked = 0
+    if new_lookups:
+        if offline:
+            sink: Sink = ApkgSink(export_path, state, deck_name, layout)
+            if args.production:
+                print(
+                    "Note: offline export builds production cards but can't suspend "
+                    "or promote them — run a live --production --apply to reconcile "
+                    "their lifecycle once imported."
+                )
+        else:
+            ensure_model(layout)
+            ensure_deck(deck_name)
+            sink = LiveSink()
 
-    # Fold the production-card sweep into the run: newly created production cards
-    # are moved to the subdeck and born suspended, and any whose recognition
-    # sibling has since graduated are promoted. Live mode only — offline .apkg
-    # can't suspend/move cards (accepted).
-    if args.production and not offline:
+        extras = []
+        if language:
+            extras.append(f"{language} translations")
+        if level:
+            extras.append(f"{level} production pairs")
+        lang_note = f" (with {' and '.join(extras)})" if extras else ""
+        print(
+            f"\nWriting {len(new_lookups)} {learning.name} card(s) with Claude"
+            f"{lang_note}. Each card is generated by {args.model}; this can take a "
+            f"minute per batch — progress is shown below.\n"
+        )
+        added, updated, junked = apply_new_cards(
+            client,
+            args.model,
+            new_lookups,
+            existing_index,
+            skipped,
+            learning,
+            deck_name,
+            batch_size=args.batch_size,
+            language=language,
+            level=level,
+            sink=sink,
+        )
+        save_skipped(skipped)
+
+    if production_maint:
+        # Backfill first so freshly filled notes are reconciled in the same run
+        # (moved to the subdeck and born suspended alongside new cards); then
+        # promote any whose recognition sibling has since graduated.
+        backfill_production(
+            client,
+            args.model,
+            deck_name,
+            learning,
+            language,
+            level,
+            limit=args.limit,
+            batch_size=args.batch_size,
+        )
         reconcile_production(deck_name, args.promote_after)
 
+    if not new_lookups:
+        return 0
     if offline:
         print(
             f"\nDone. {added} new card(s); {updated} lookup(s) linked to existing "
